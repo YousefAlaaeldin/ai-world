@@ -3,18 +3,18 @@
 Deliberately model-agnostic. An agent's decision is delegated to a `policy`
 callable, so you can:
   - run the ENTIRE loop with a cheap stub policy (no API cost) to shake out bugs,
-  - then swap in a Concordia/LLM-backed policy for real experiments,
-without touching the world code.
-
-This is the pure-mechanics substrate. Concordia's Game Master will eventually
-replace / wrap `resolve_action`, but keeping a working non-LLM version means we can
-validate mortality, resource depletion, and logging before spending a cent.
+  - then swap in an LLM-backed policy (components/llm_policy.py) for real
+    experiments,
+without touching the world code. `resolve_action` IS the Game Master -- see
+README.md for the design decision to implement this as a small custom engine
+rather than wrapping DeepMind Concordia.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import random
+from collections import deque
 from typing import Callable, Protocol
 
 from ..drives import DriveSystem, DriveKind
@@ -78,6 +78,7 @@ class World:
         logger: RunLogger,
         rng: random.Random | None = None,
         mortality: bool = True,
+        adjacency: dict[str, set[str]] | None = None,
     ):
         self.locations = locations
         self.resources = resources
@@ -86,6 +87,16 @@ class World:
         self.rng = rng or random.Random(0)
         self.mortality = mortality
         self.tick_count = 0
+        # Which locations are one move apart. Defaults to fully connected (every
+        # location reachable from every other in a single move) when not given --
+        # that was every config's IMPLICIT behavior before. Real configs should
+        # set world.edges (see aiworld.config.adjacency_from_config) so movement
+        # has actual cost/structure instead of flattening "environment" down to
+        # a single binary: resource here or not.
+        self.adjacency: dict[str, set[str]] = adjacency or {
+            loc: {other for other in locations if other != loc}
+            for loc in locations
+        }
 
     # ---- perception ----
 
@@ -106,15 +117,35 @@ class World:
                 obs.append(Observation(
                     text=f"{other.agent_id} is here with you",
                     related_drive=DriveKind.AFFILIATION))
-        # Adjacent locations (fully connected world for now).
-        for loc in self.locations:
-            if loc != agent.location:
-                obs.append(Observation(text=f"you could move to {loc}",
-                                       related_drive=None, base_weight=0.5))
+        # Only actual neighbors -- a location 2+ hops away isn't perceivable or
+        # reachable in one move, so it isn't offered as a choice.
+        for loc in self.adjacency.get(agent.location, ()):
+            obs.append(Observation(text=f"you could move to {loc}",
+                                   related_drive=None, base_weight=0.5))
         if not obs:
             obs.append(Observation(text="the area is empty and quiet",
                                    related_drive=None))
         return obs
+
+    def next_hop_towards(self, start: str, goal: str) -> str | None:
+        """BFS shortest-path first step from `start` toward `goal` over
+        self.adjacency. None if already there or goal is unreachable. Used by
+        the stub policy to navigate a non-trivial topology one hop at a time --
+        an LLM policy doesn't need this, it just perceives its immediate
+        neighbors each tick and decides for itself."""
+        if start == goal:
+            return None
+        visited = {start}
+        queue = deque([(start, None)])
+        while queue:
+            loc, first_step = queue.popleft()
+            for neighbor in self.adjacency.get(loc, ()):
+                if neighbor == goal:
+                    return first_step or neighbor
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, first_step or neighbor))
+        return None
 
     # ---- action resolution (proto Game Master) ----
 
@@ -142,10 +173,10 @@ class World:
 
         if action.startswith("move:"):
             dest = action.split(":", 1)[1]
-            if dest in self.locations:
+            if dest in self.adjacency.get(agent.location, ()):
                 agent.location = dest
                 return f"moved to {dest}"
-            return f"tried to move to unknown place {dest}"
+            return f"tried to move to unreachable place {dest}"
 
         if action.startswith("talk:"):
             target_id = action.split(":", 1)[1]

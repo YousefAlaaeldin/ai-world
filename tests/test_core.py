@@ -14,7 +14,7 @@ from aiworld.self_model import SelfModel, SelfModelHistory, SHARED_DIRECTIVE  # 
 from aiworld.salience import Observation, rank_observations  # noqa: E402
 from aiworld.sim.world import Agent, World, ResourceNode, agent_recent_memories  # noqa: E402
 from aiworld.logging_schema import RunLogger  # noqa: E402
-from aiworld.config import initial_locations  # noqa: E402
+from aiworld.config import initial_locations, adjacency_from_config  # noqa: E402
 import random  # noqa: E402
 
 
@@ -179,6 +179,44 @@ def test_talk_to_absent_agent_fails_safely(tmp_path):
 
     assert "not here" in outcome
     assert a.drives.states[DriveKind.AFFILIATION].level == before  # no false satisfaction
+
+
+def test_adjacency_from_config_uses_explicit_edges():
+    cfg = {"world": {"locations": ["a", "b", "c"], "edges": [["a", "b"]]}}
+    adjacency = adjacency_from_config(cfg)
+    assert adjacency["a"] == {"b"}
+    assert adjacency["b"] == {"a"}
+    assert adjacency["c"] == set()  # isolated -- no edge touches it
+
+
+def test_adjacency_from_config_falls_back_to_fully_connected():
+    cfg = {"world": {"locations": ["a", "b", "c"]}}  # no edges key
+    adjacency = adjacency_from_config(cfg)
+    assert adjacency["a"] == {"b", "c"}
+
+
+def test_move_rejected_when_not_adjacent(tmp_path):
+    logger = RunLogger("test_move", root=str(tmp_path))
+    agent = Agent("a0", "hub", DriveSystem(), SelfModelHistory("a0"))
+    world = World(["hub", "spoke", "far"], [], [agent], logger,
+                 adjacency={"hub": {"spoke"}, "spoke": {"hub"}, "far": set()})
+    outcome = world.resolve_action(agent, "move:far")  # not adjacent to hub
+    logger.close()
+    assert "unreachable" in outcome
+    assert agent.location == "hub"  # unchanged
+
+
+def test_next_hop_towards_multi_hop(tmp_path):
+    agent = Agent("a0", "north", DriveSystem(), SelfModelHistory("a0"))
+    adjacency = {"north": {"center"}, "south": {"center"},
+                "center": {"north", "south"}}
+    logger = RunLogger("test_hop", root=str(tmp_path))
+    world = World(["north", "south", "center"], [], [agent],
+                 logger, adjacency=adjacency)
+    assert world.next_hop_towards("north", "south") == "center"  # 2-hop path
+    assert world.next_hop_towards("north", "center") == "center"  # direct
+    assert world.next_hop_towards("north", "north") is None       # already there
+    logger.close()
 
 
 def test_initial_locations_isolates_when_enough_locations():

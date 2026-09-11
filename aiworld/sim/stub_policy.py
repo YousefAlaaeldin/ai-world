@@ -32,12 +32,18 @@ def make_stub_policy(rng: random.Random | None = None):
         # If the needed resource is here, consume it.
         if any(r.drive == urgent for r in here) and max(hunger, thirst) > 0.3:
             return "consume"
-        # Otherwise wander toward some location that has the needed resource.
+        # Otherwise head toward some location that has the needed resource --
+        # one hop at a time (world.next_hop_towards), since the world isn't
+        # fully connected: a resource 2+ locations away can't be jumped to
+        # directly, only navigated toward.
         targets = [r.location for r in world.resources
                    if r.drive == urgent and r.quantity > 0
                    and r.location != agent.location]
         if targets and max(hunger, thirst) > 0.2:
-            return f"move:{rng.choice(targets)}"
+            goal = rng.choice(targets)
+            next_hop = world.next_hop_towards(agent.location, goal)
+            if next_hop:
+                return f"move:{next_hop}"
         # Low pressure: sometimes socialize, sometimes wander, sometimes wait.
         roll = rng.random()
         if roll < 0.2:
@@ -47,7 +53,9 @@ def make_stub_policy(rng: random.Random | None = None):
             if others:
                 return f"talk:{rng.choice(others)}"
         if roll < 0.5:
-            return f"move:{rng.choice(world.locations)}"
+            neighbors = list(world.adjacency.get(agent.location, ()))
+            if neighbors:
+                return f"move:{rng.choice(neighbors)}"
         return "wait"
 
     return policy

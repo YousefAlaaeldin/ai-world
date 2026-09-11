@@ -39,6 +39,25 @@ def resources_from_config(cfg: dict[str, Any]) -> list:
     ]
 
 
+def adjacency_from_config(cfg: dict[str, Any]) -> dict[str, set[str]]:
+    """Build a bidirectional adjacency map from world.edges (pairs of location
+    names). Falls back to fully connected (every location reachable from every
+    other in one move) if `edges` is omitted -- kept for backward compatibility,
+    but real configs should define edges: a fully-connected world flattens
+    "environment" to a single binary (resource here or not) and gives movement
+    no cost or structure to actually matter.
+    """
+    locations = cfg["world"]["locations"]
+    edges = cfg["world"].get("edges")
+    if not edges:
+        return {loc: {other for other in locations if other != loc} for loc in locations}
+    adjacency: dict[str, set[str]] = {loc: set() for loc in locations}
+    for a, b in edges:
+        adjacency[a].add(b)
+        adjacency[b].add(a)
+    return adjacency
+
+
 def initial_locations(rng: random.Random, locations: list[str], n_agents: int) -> list[str]:
     """Starting location per agent, in agent order.
 

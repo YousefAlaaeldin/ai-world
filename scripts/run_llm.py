@@ -30,7 +30,8 @@ from aiworld.components.llm_policy import make_llm_policy  # noqa: E402
 from aiworld.components.self_model_component import (  # noqa: E402
     make_reflect_fn, FLAT_REVISION_PROMPT, LEADING_REVISION_PROMPT)
 from aiworld.config import (  # noqa: E402
-    load_config, drive_specs_from_config, resources_from_config, initial_locations)
+    load_config, drive_specs_from_config, resources_from_config, initial_locations,
+    adjacency_from_config)
 
 
 def build_world(cfg, run_id, n_agents, seed, mortality, model_name):
@@ -38,6 +39,7 @@ def build_world(cfg, run_id, n_agents, seed, mortality, model_name):
     locations = cfg["world"]["locations"]
     resources = resources_from_config(cfg)
     specs = drive_specs_from_config(cfg)
+    adjacency = adjacency_from_config(cfg)
     start_locations = initial_locations(rng, locations, n_agents)
     agents = [
         Agent(agent_id=f"agent_{i}", location=start_locations[i],
@@ -49,7 +51,8 @@ def build_world(cfg, run_id, n_agents, seed, mortality, model_name):
         "run_id": run_id, "n_agents": n_agents, "seed": seed,
         "mortality": mortality, "policy": "llm", "model": model_name,
     })
-    return World(locations, resources, agents, logger, rng=rng, mortality=mortality)
+    return World(locations, resources, agents, logger, rng=rng, mortality=mortality,
+                adjacency=adjacency)
 
 
 def main():

@@ -34,6 +34,17 @@ description: >
 
 world:
   locations: [outpost_1, outpost_2, outpost_3, outpost_4, outpost_5, outpost_6]
+  # A ring, not fully connected -- kept structurally consistent with
+  # experiment_minimal.yaml's real topology. Doesn't undermine isolation: with
+  # abundant resources everywhere there's still no material reason to move, so
+  # this only matters if an agent chooses affiliation over staying put.
+  edges:
+    - [outpost_1, outpost_2]
+    - [outpost_2, outpost_3]
+    - [outpost_3, outpost_4]
+    - [outpost_4, outpost_5]
+    - [outpost_5, outpost_6]
+    - [outpost_6, outpost_1]
   resources:
     - {location: outpost_1, drive: hunger, quantity: 999999}
     - {location: outpost_1, drive: thirst, quantity: 999999}

@@ -9,6 +9,17 @@ description: >
 
 world:
   locations: [north, south, east, west, center]
+  # Hub-and-spoke: center connects to all four cardinals, cardinals do NOT
+  # connect to each other directly. Moving between resource zones (e.g. north's
+  # food to south's water) costs 2 moves via center, not 1 -- so "environment"
+  # is more than a binary resource-here-or-not; travel commitment and locality
+  # of experience are now real. (aiworld.config.adjacency_from_config; falls
+  # back to fully-connected if this key is omitted.)
+  edges:
+    - [north, center]
+    - [south, center]
+    - [east, center]
+    - [west, center]
   resources:
     - {location: north, drive: hunger, quantity: 30}
     - {location: south, drive: thirst, quantity: 30}
@@ -34,7 +45,7 @@ reflection:
 run:
   ticks: 40
   seeds: [0, 1, 2, 3, 4]   # expand to 20+ for real results
-  model: null              # set to your Concordia/LLM backend id for live runs
+  model: null              # set via AIWORLD_MODEL env var (aiworld/llm_client.py); null = use the client's default
 
 confound_controls:
   # Phase 3 runs these FIRST, before believing any result.

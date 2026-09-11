@@ -22,7 +22,8 @@ from aiworld.logging_schema import RunLogger  # noqa: E402
 from aiworld.sim.world import World, Agent  # noqa: E402
 from aiworld.sim.stub_policy import make_stub_policy  # noqa: E402
 from aiworld.config import (  # noqa: E402
-    load_config, drive_specs_from_config, resources_from_config, initial_locations)
+    load_config, drive_specs_from_config, resources_from_config, initial_locations,
+    adjacency_from_config)
 
 
 def build_world(cfg: dict, run_id: str, n_agents: int, seed: int, mortality: bool) -> World:
@@ -30,6 +31,7 @@ def build_world(cfg: dict, run_id: str, n_agents: int, seed: int, mortality: boo
     locations = cfg["world"]["locations"]
     resources = resources_from_config(cfg)
     specs = drive_specs_from_config(cfg)
+    adjacency = adjacency_from_config(cfg)
     # All agents start IDENTICAL except id and starting location.
     start_locations = initial_locations(rng, locations, n_agents)
     agents = [
@@ -48,7 +50,7 @@ def build_world(cfg: dict, run_id: str, n_agents: int, seed: int, mortality: boo
         "Stub policy — mechanics smoke test only, not a result.",
     })
     return World(locations, resources, agents, logger,
-                 rng=rng, mortality=mortality)
+                 rng=rng, mortality=mortality, adjacency=adjacency)
 
 
 def main():

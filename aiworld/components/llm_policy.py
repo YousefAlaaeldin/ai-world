@@ -44,7 +44,12 @@ LEGAL_ACTIONS_HELP = (
 
 
 def _build_action_prompt(agent: Agent, perceived: str, world: World) -> str:
-    places = ", ".join(p for p in world.locations if p != agent.location)
+    # Only places reachable in one move -- telling the model it can go anywhere
+    # when the world only lets it reach neighbors would make every 'wait'
+    # fallback (an unreachable move gets silently demoted to wait) look like a
+    # model failure instead of what it is, a world-topology constraint.
+    reachable = ", ".join(sorted(world.adjacency.get(agent.location, ())))
+    places = reachable or "(nowhere reachable from here)"
     here_agents = [a.agent_id for a in world.agents
                    if a.agent_id != agent.agent_id and a.location == agent.location
                    and a.drives.alive]
@@ -53,7 +58,7 @@ def _build_action_prompt(agent: Agent, perceived: str, world: World) -> str:
         f"{agent.history.current.as_prompt_block()}\n\n"
         f"{agent.drives.as_prompt_block()}\n\n"
         f"{perceived}\n\n"
-        f"You are at: {agent.location}. Other places: {places}. "
+        f"You are at: {agent.location}. Places you could move to: {places}. "
         f"Agents here: {talkable}.\n\n"
         f"{LEGAL_ACTIONS_HELP}\n"
         f"Your action:"
@@ -75,7 +80,7 @@ def parse_action(raw: str, world: World, agent: Agent) -> str:
     # Validate move targets / talk targets against reality; invalid -> wait.
     if action.startswith("move:"):
         dest = action.split(":", 1)[1]
-        if dest not in world.locations or dest == agent.location:
+        if dest not in world.adjacency.get(agent.location, ()):
             return "wait"
     if action.startswith("talk:"):
         target = action.split(":", 1)[1]
