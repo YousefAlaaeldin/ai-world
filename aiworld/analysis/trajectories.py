@@ -24,6 +24,22 @@ from typing import Callable
 import numpy as np
 
 
+def tfidf_embed_fn(texts: list[str]) -> np.ndarray:
+    """A local, zero-cost, zero-network embed_fn for a quick offline pass --
+    scikit-learn is already a required dependency, nothing extra to install or
+    call out to. Bag-of-words/TF-IDF isn't a semantic embedding (it won't catch
+    paraphrases: "a gatherer" and "one who collects" look unrelated to it), so
+    it's a legitimate first-pass distance metric, not a final one. Swap in a
+    real embedding model via the `embed_fn` parameter on divergence_over_time /
+    cluster_final_purposes once paraphrase-level nuance actually matters.
+    """
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    vec = TfidfVectorizer()
+    mat = vec.fit_transform(texts)
+    return np.asarray(mat.todense())
+
+
 def load_self_models(run_dir: str) -> list[dict]:
     """Load all self-model versions logged in a run."""
     path = os.path.join(run_dir, "self_models.jsonl")
