@@ -1,0 +1,22 @@
+# Core simulation
+# No external ML framework required. The tick loop, action resolution (our
+# Game-Master equivalent), and reflection step are a small custom engine — see
+# aiworld/sim/world.py — not a DeepMind Concordia wrapper. Deliberate design
+# choice: full control over the drive/salience mechanics, a dependency-light
+# stack, and everything testable without a live model (tests/ needs none of this).
+
+# Analysis layer
+numpy>=1.26
+scikit-learn>=1.4
+
+# Dev
+pytest>=8.0
+pyyaml>=6.0        # experiment config files, configs/*.yaml
+requests>=2.31     # LLM client speaks OpenAI-compatible /v1/chat/completions,
+                   # which covers local Ollama/vLLM/LM Studio out of the box
+
+# Optional — only needed if you swap the default local Ollama backend for a
+# hosted provider's own SDK instead of raw requests (llm_client.py works via
+# requests either way; these aren't required for that):
+#   anthropic
+#   openai

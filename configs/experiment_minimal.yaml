@@ -1,0 +1,43 @@
+# Minimal first experiment (DESIGN.md §9).
+# Answers only: do trajectories diverge, and do purpose-clusters recur?
+
+experiment_name: minimal_divergence
+description: >
+  5-8 identical agents, one resource type per drive, mortality ON, self-model
+  revised every N ticks. Run 20+ times from the identical start with different
+  seeds. First real question is divergence + cluster recurrence.
+
+world:
+  locations: [north, south, east, west, center]
+  resources:
+    - {location: north, drive: hunger, quantity: 30}
+    - {location: south, drive: thirst, quantity: 30}
+    - {location: east,  drive: hunger, quantity: 15}
+    - {location: west,  drive: thirst, quantity: 15}
+  mortality: true
+
+agents:
+  count: 6
+  # Everyone starts IDENTICAL. No names, no personas, no goals beyond the directive.
+
+drives:
+  hunger:      {decay_per_tick: 0.05, replenish_amount: 0.6, lethal: true}
+  thirst:      {decay_per_tick: 0.08, replenish_amount: 0.7, lethal: true}
+  affiliation: {decay_per_tick: 0.03, replenish_amount: 0.4, lethal: false}
+
+reflection:
+  every_n_ticks: 5
+  # Which revision prompt to use. 'flat' is the non-leading control (default).
+  # 'leading' exists ONLY to run the confound check — never as the main condition.
+  prompt: flat        # flat | leading
+
+run:
+  ticks: 40
+  seeds: [0, 1, 2, 3, 4]   # expand to 20+ for real results
+  model: null              # set to your Concordia/LLM backend id for live runs
+
+confound_controls:
+  # Phase 3 runs these FIRST, before believing any result.
+  vary_reflection_prompt: true     # rerun with prompt: leading, compare clusters
+  flat_control: true               # the flat prompt run above
+  cross_model: false               # set true and list models to test model-dependence

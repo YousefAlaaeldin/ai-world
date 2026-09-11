@@ -1,0 +1,133 @@
+"""Drives: pressures that bias attention, not meters to maximize.
+
+Design commitment (DESIGN.md §3): a drive must NOT be a score the agent is told to
+optimize, or we smuggle in a purpose and defeat the premise. Instead each drive:
+  - decays every tick,
+  - is replenished by a specific action,
+  - biases the SALIENCE of related observations (high hunger -> food observations
+    become prominent),
+  - and, for physical drives, kills the agent at zero.
+
+The agent is never instructed to "reduce hunger." It simply perceives food more
+vividly when hungry and decides for itself what to do. Whether it chooses survival,
+and what it builds on top of survival, is the open question.
+
+Pure Python. No LLM. Fully unit-testable.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from enum import Enum
+
+
+class DriveKind(str, Enum):
+    HUNGER = "hunger"
+    THIRST = "thirst"
+    AFFILIATION = "affiliation"  # abstract social/intimacy pressure; non-lethal
+
+
+@dataclasses.dataclass
+class DriveSpec:
+    """Static configuration for one drive type."""
+
+    kind: DriveKind
+    decay_per_tick: float          # how fast the drive rises toward crisis
+    replenish_amount: float        # how much the satisfying action restores
+    lethal: bool                   # does hitting the ceiling kill the agent?
+    # Level runs 0.0 (fully satisfied) .. 1.0 (crisis / death for lethal drives).
+
+
+# Sensible defaults for the minimal first build. Tune per experiment via config.
+DEFAULT_SPECS: dict[DriveKind, DriveSpec] = {
+    DriveKind.HUNGER: DriveSpec(DriveKind.HUNGER, decay_per_tick=0.05,
+                                replenish_amount=0.6, lethal=True),
+    DriveKind.THIRST: DriveSpec(DriveKind.THIRST, decay_per_tick=0.08,
+                                replenish_amount=0.7, lethal=True),
+    DriveKind.AFFILIATION: DriveSpec(DriveKind.AFFILIATION, decay_per_tick=0.03,
+                                     replenish_amount=0.4, lethal=False),
+}
+
+
+@dataclasses.dataclass
+class DriveState:
+    """The live level of one drive for one agent. 0 = satisfied, 1 = crisis."""
+
+    kind: DriveKind
+    level: float = 0.0
+
+    def tick(self, spec: DriveSpec) -> None:
+        self.level = min(1.0, self.level + spec.decay_per_tick)
+
+    def replenish(self, spec: DriveSpec) -> None:
+        self.level = max(0.0, self.level - spec.replenish_amount)
+
+    def is_lethal_now(self, spec: DriveSpec) -> bool:
+        return spec.lethal and self.level >= 1.0
+
+    def salience_weight(self) -> float:
+        """How strongly this drive should amplify related observations.
+
+        Nonlinear: gentle when satisfied, sharp near crisis, so a starving agent's
+        perception is dominated by food without a hungry agent being obsessed. This
+        is a perception weight, NOT a reward.
+        """
+        return self.level ** 2
+
+
+class DriveSystem:
+    """All drives for a single agent."""
+
+    def __init__(self, specs: dict[DriveKind, DriveSpec] | None = None):
+        self.specs = specs or DEFAULT_SPECS
+        self.states: dict[DriveKind, DriveState] = {
+            kind: DriveState(kind=kind, level=0.0) for kind in self.specs
+        }
+        self.alive = True
+        self.cause_of_death: str | None = None
+        self.died_at_tick: int | None = None
+
+    def step(self, tick: int) -> None:
+        """Advance all drives one tick and check mortality."""
+        if not self.alive:
+            return
+        for kind, state in self.states.items():
+            spec = self.specs[kind]
+            state.tick(spec)
+            if state.is_lethal_now(spec):
+                self.alive = False
+                self.cause_of_death = kind.value
+                self.died_at_tick = tick
+
+    def satisfy(self, kind: DriveKind) -> None:
+        """Apply the replenishing action for one drive (e.g. the agent ate)."""
+        if kind in self.states:
+            self.states[kind].replenish(self.specs[kind])
+
+    def salience_biases(self) -> dict[DriveKind, float]:
+        """Per-drive perception weights, consumed by the salience layer."""
+        return {k: s.salience_weight() for k, s in self.states.items()}
+
+    def as_prompt_block(self) -> str:
+        """A plain, non-leading description of bodily state for the agent's context.
+
+        Deliberately neutral wording. We describe sensation, not instruction: we say
+        'you feel very hungry', never 'you should find food'.
+        """
+        phrases = []
+        for kind, state in self.states.items():
+            phrases.append(f"{kind.value}: {_describe(state.level)}")
+        return "Bodily state — " + ", ".join(phrases)
+
+    def snapshot(self) -> dict[str, float]:
+        return {k.value: round(s.level, 4) for k, s in self.states.items()}
+
+
+def _describe(level: float) -> str:
+    if level < 0.2:
+        return "not noticeable"
+    if level < 0.5:
+        return "mild"
+    if level < 0.8:
+        return "strong"
+    return "overwhelming"
