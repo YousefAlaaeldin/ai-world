@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from aiworld.drives import DriveSystem  # noqa: E402
 from aiworld.self_model import SelfModelHistory  # noqa: E402
 from aiworld.logging_schema import RunLogger  # noqa: E402
-from aiworld.sim.world import World, Agent  # noqa: E402
+from aiworld.sim.world import World, Agent, agent_recent_memories  # noqa: E402
 from aiworld.llm_client import LLMClient, config_from_env  # noqa: E402
 from aiworld.components.llm_policy import make_llm_policy  # noqa: E402
 from aiworld.components.self_model_component import (  # noqa: E402
@@ -87,6 +87,7 @@ def main():
         history_by_agent=history_by_agent,
         logger=world.logger,
         prompt_template=template,
+        recent_memories_fn=agent_recent_memories,
     )
 
     # Log every agent's identical starting self-model as version 0.

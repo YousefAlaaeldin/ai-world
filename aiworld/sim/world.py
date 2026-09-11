@@ -38,6 +38,26 @@ class Agent:
     location: str
     drives: DriveSystem
     history: SelfModelHistory
+    # Per-tick memory buffer, accumulated every tick and drained by
+    # agent_recent_memories() on each reflection. This is what actually gives the
+    # environment a channel into the self-model rewrite -- without it, reflection
+    # sees only the single most recent action's outcome, not what happened across
+    # the ticks since the agent last reflected.
+    recent_memories: list[str] = dataclasses.field(default_factory=list)
+
+
+def agent_recent_memories(agent: Agent) -> str:
+    """Join and DRAIN an agent's per-tick memory buffer for use in one reflection
+    prompt. Called once per reflection; covers every tick since the buffer was
+    last drained (i.e. since the agent's last reflection, or run start), not just
+    the immediately preceding tick. Pass this as `recent_memories_fn` to
+    components.self_model_component.make_reflect_fn.
+    """
+    if not agent.recent_memories:
+        return "(nothing notable happened)"
+    text = "\n".join(agent.recent_memories)
+    agent.recent_memories.clear()
+    return text
 
 
 class Policy(Protocol):
@@ -146,6 +166,8 @@ class World:
 
                 action = policy(agent, perceived, self)
                 outcome = self.resolve_action(agent, action)
+                agent.recent_memories.append(
+                    f"tick {self.tick_count}: did '{action}' -> {outcome}")
 
                 # Optional reflection (self-model revision) — LLM-backed in reality.
                 if reflect_fn and self.tick_count % reflect_every == 0:

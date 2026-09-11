@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from aiworld.drives import DriveSystem, DriveKind, DriveSpec  # noqa: E402
 from aiworld.self_model import SelfModel, SelfModelHistory, SHARED_DIRECTIVE  # noqa: E402
 from aiworld.salience import Observation, rank_observations  # noqa: E402
+from aiworld.sim.world import Agent, agent_recent_memories  # noqa: E402
 
 
 # ---- drives & mortality ----
@@ -102,6 +103,27 @@ def test_hungry_agent_ranks_food_first():
     biases = {DriveKind.HUNGER: 1.0, DriveKind.THIRST: 0.0}
     ranked = rank_observations(obs, biases)
     assert ranked[0][0].text == "a pile of fruit"
+
+
+def test_recent_memories_accumulate_across_ticks():
+    agent = Agent("agent_0", "north", DriveSystem(), SelfModelHistory("agent_0"))
+    agent.recent_memories.append("tick 1: did 'wait' -> waited")
+    agent.recent_memories.append("tick 2: did 'consume' -> consumed hunger resource")
+    text = agent_recent_memories(agent)
+    assert "tick 1" in text and "tick 2" in text
+
+
+def test_recent_memories_drain_after_read():
+    agent = Agent("agent_0", "north", DriveSystem(), SelfModelHistory("agent_0"))
+    agent.recent_memories.append("tick 1: did 'wait' -> waited")
+    agent_recent_memories(agent)
+    assert agent.recent_memories == []  # buffer cleared, so next reflection
+                                        # only sees ticks since THIS reflection
+
+
+def test_recent_memories_empty_has_sane_fallback():
+    agent = Agent("agent_0", "north", DriveSystem(), SelfModelHistory("agent_0"))
+    assert agent_recent_memories(agent) == "(nothing notable happened)"
 
 
 def test_salience_reweights_never_hides():
