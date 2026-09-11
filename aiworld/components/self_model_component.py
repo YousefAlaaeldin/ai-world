@@ -29,7 +29,7 @@ from ..self_model import SelfModel, SelfModelHistory
 # The default below is deliberately flat / non-leading (the "control" wording).
 FLAT_REVISION_PROMPT = (
     "Here is how you have described yourself so far:\n{self_model}\n\n"
-    "Recent things you have experienced:\n{recent_memories}\n\n"
+    "Things you have experienced:\n{recent_memories}\n\n"
     "{bodily_state}\n\n"
     "If anything has changed in how you would describe yourself, rewrite the three "
     "lines below. If nothing has changed, repeat them unchanged. Respond with "

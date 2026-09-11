@@ -111,16 +111,21 @@ class DriveSystem:
         if kind in self.states:
             self.states[kind].replenish(self.specs[kind])
 
+    def crisis_drives(self) -> list[str]:
+        """Names of LETHAL drives currently in 'overwhelming' territory
+        (>= CRISIS_LEVEL, matching the _describe() threshold below) -- the
+        near-death zone. Non-lethal drives (affiliation) never appear here;
+        there's no near-death moment to name for those."""
+        return [k.value for k, s in self.states.items()
+               if self.specs[k].lethal and s.level >= CRISIS_LEVEL]
+
     def in_crisis(self) -> bool:
-        """True if any LETHAL drive is in 'overwhelming' territory (>= CRISIS_LEVEL,
-        matching the _describe() threshold below) -- the near-death zone. Used to
-        trigger an immediate reflection instead of waiting for the next scheduled
-        one (DESIGN.md §5.4 wants causal traces like "became a protector after a
-        near-death rescue," which needs the self-model to react near the scare,
-        not up to reflect_every-1 ticks later). Non-lethal drives (affiliation)
-        never count -- there's no near-death moment to react to there."""
-        return any(self.specs[k].lethal and s.level >= CRISIS_LEVEL
-                  for k, s in self.states.items())
+        """True if any LETHAL drive is in crisis. Used to trigger an immediate
+        reflection instead of waiting for the next scheduled one (DESIGN.md §5.4
+        wants causal traces like "became a protector after a near-death rescue,"
+        which needs the self-model to react near the scare, not up to
+        reflect_every-1 ticks later)."""
+        return bool(self.crisis_drives())
 
     def salience_biases(self) -> dict[DriveKind, float]:
         """Per-drive perception weights, consumed by the salience layer."""

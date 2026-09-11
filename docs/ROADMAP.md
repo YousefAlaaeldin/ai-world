@@ -19,6 +19,13 @@ Ordered so each phase is runnable and answers something before the next is built
 - [x] `configs/*.yaml` is the single source of truth; scripts load it instead of
       duplicating values (CLI flags override individual fields per-run)
 - [x] Stub-policy mechanics run: 6 agents, mortality on, 40 ticks — `runs/smoke01/`
+- [x] Long-term memory (`Agent.long_term_memory`, `remember_long_term()`) — a
+      capped, never-drained timeline of objectively salient events (crisis,
+      resource depletion, being talked to), distinct from the short-term
+      `recent_memories` buffer that drains every reflection. Serves DESIGN.md
+      §5.4's causal-tracing goal: a much later reflection can still recall a
+      *specific* early event, not just whatever got compressed into the
+      self-model text at the time.
 - [ ] Live run against the local model (`python scripts/run_llm.py`). Confirm it
       *runs* end-to-end and produces sane self-model revisions before trusting output.
 

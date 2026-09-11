@@ -12,7 +12,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from aiworld.drives import DriveSystem, DriveKind, DriveSpec  # noqa: E402
 from aiworld.self_model import SelfModel, SelfModelHistory, SHARED_DIRECTIVE  # noqa: E402
 from aiworld.salience import Observation, rank_observations  # noqa: E402
-from aiworld.sim.world import Agent, World, ResourceNode, agent_recent_memories  # noqa: E402
+from aiworld.sim.world import (  # noqa: E402
+    Agent, World, ResourceNode, agent_recent_memories, remember_long_term,
+    LONG_TERM_MEMORY_CAP)
 from aiworld.logging_schema import RunLogger  # noqa: E402
 from aiworld.config import initial_locations, adjacency_from_config  # noqa: E402
 import random  # noqa: E402
@@ -142,6 +144,37 @@ def test_recent_memories_drain_after_read():
                                         # only sees ticks since THIS reflection
 
 
+def test_long_term_memory_persists_across_reads():
+    agent = Agent("agent_0", "north", DriveSystem(), SelfModelHistory("agent_0"))
+    remember_long_term(agent, "tick 1: nearly died from thirst")
+    agent_recent_memories(agent)   # drains recent_memories, NOT long_term_memory
+    agent_recent_memories(agent)   # a second read still sees it
+    assert agent.long_term_memory == ["tick 1: nearly died from thirst"]
+
+
+def test_long_term_memory_caps_with_fifo_eviction():
+    agent = Agent("agent_0", "north", DriveSystem(), SelfModelHistory("agent_0"))
+    for i in range(LONG_TERM_MEMORY_CAP + 5):
+        remember_long_term(agent, f"event {i}")
+    assert len(agent.long_term_memory) == LONG_TERM_MEMORY_CAP
+    assert agent.long_term_memory[0] == "event 5"   # oldest 5 evicted
+    assert agent.long_term_memory[-1] == f"event {LONG_TERM_MEMORY_CAP + 4}"
+
+
+def test_agent_recent_memories_includes_long_term_section():
+    agent = Agent("agent_0", "north", DriveSystem(), SelfModelHistory("agent_0"))
+    remember_long_term(agent, "tick 1: nearly died from thirst")
+    text = agent_recent_memories(agent)
+    assert "Further back, you remember" in text
+    assert "nearly died from thirst" in text
+
+
+def test_agent_recent_memories_omits_long_term_section_when_empty():
+    agent = Agent("agent_0", "north", DriveSystem(), SelfModelHistory("agent_0"))
+    text = agent_recent_memories(agent)
+    assert "Further back" not in text
+
+
 def test_recent_memories_empty_has_sane_fallback():
     agent = Agent("agent_0", "north", DriveSystem(), SelfModelHistory("agent_0"))
     assert agent_recent_memories(agent) == "(nothing notable happened)"
@@ -211,6 +244,28 @@ def test_crisis_triggers_immediate_reflection(tmp_path):
     logger.close()
 
     assert calls == [(1, "crisis")]
+    assert any("nearly died from hunger" in m for m in agent.long_term_memory)
+
+
+def test_resource_depletion_persists_to_long_term_memory(tmp_path):
+    resources = [ResourceNode("loc", DriveKind.HUNGER, quantity=1)]
+    agent = Agent("a0", "loc", DriveSystem(), SelfModelHistory("a0"))
+    logger = RunLogger("test_depletion_ltm", root=str(tmp_path))
+    world = World(["loc"], resources, [agent], logger)
+    world.resolve_action(agent, "consume")  # depletes the only unit -> quantity 0
+    logger.close()
+    assert any("ran out" in m for m in agent.long_term_memory)
+
+
+def test_talk_persists_to_both_parties_long_term_memory(tmp_path):
+    a = Agent("a0", "loc", DriveSystem(), SelfModelHistory("a0"))
+    b = Agent("a1", "loc", DriveSystem(), SelfModelHistory("a1"))
+    logger = RunLogger("test_talk_ltm", root=str(tmp_path))
+    world = World(["loc"], [], [a, b], logger)
+    world.resolve_action(a, "talk:a1")
+    logger.close()
+    assert any("talked with a1" in m for m in a.long_term_memory)
+    assert any("a0 approached" in m for m in b.long_term_memory)
 
 
 def test_adjacency_from_config_uses_explicit_edges():

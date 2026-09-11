@@ -44,19 +44,51 @@ class Agent:
     # sees only the single most recent action's outcome, not what happened across
     # the ticks since the agent last reflected.
     recent_memories: list[str] = dataclasses.field(default_factory=list)
+    # Durable, capped, append-only timeline of objectively salient events (crisis,
+    # resource depletion, being talked to) -- see remember_long_term(). Unlike
+    # recent_memories, this is NEVER drained; it's what lets a reflection many
+    # ticks later still recall a specific early event by name, not just whatever
+    # got compressed into the self-model text at the time. Only a curated,
+    # bounded set of events reach it -- routine actions ('wait', ordinary moves)
+    # never do, so it stays a timeline of what actually mattered, not a full
+    # transcript.
+    long_term_memory: list[str] = dataclasses.field(default_factory=list)
+
+
+LONG_TERM_MEMORY_CAP = 20  # oldest entry evicted past this; keeps prompts bounded
+
+
+def remember_long_term(agent: Agent, entry: str) -> None:
+    """Append a durable memory entry, evicting the oldest one past the cap.
+
+    Only called from objective, deterministic triggers already used elsewhere in
+    the sim (crisis, resource depletion, being talked to) -- never from a
+    subjective "was this important" judgement, and never via an extra LLM call.
+    That keeps this from becoming a new confound surface (DESIGN.md §8): what
+    persists long-term is decided by the same fixed rules for every agent, not
+    by curation that could smuggle in framing.
+    """
+    agent.long_term_memory.append(entry)
+    if len(agent.long_term_memory) > LONG_TERM_MEMORY_CAP:
+        agent.long_term_memory.pop(0)
 
 
 def agent_recent_memories(agent: Agent) -> str:
     """Join and DRAIN an agent's per-tick memory buffer for use in one reflection
-    prompt. Called once per reflection; covers every tick since the buffer was
-    last drained (i.e. since the agent's last reflection, or run start), not just
-    the immediately preceding tick. Pass this as `recent_memories_fn` to
-    components.self_model_component.make_reflect_fn.
+    prompt, then append the (never-drained) long-term memory timeline after it.
+    Called once per reflection; the short-term part covers every tick since the
+    buffer was last drained (since the agent's last reflection, or run start),
+    not just the immediately preceding tick. Pass this as `recent_memories_fn`
+    to components.self_model_component.make_reflect_fn.
     """
     if not agent.recent_memories:
-        return "(nothing notable happened)"
-    text = "\n".join(agent.recent_memories)
+        text = "(nothing notable happened)"
+    else:
+        text = "\n".join(agent.recent_memories)
     agent.recent_memories.clear()
+    if agent.long_term_memory:
+        long_ago = "\n".join(f"- {m}" for m in agent.long_term_memory)
+        text = f"{text}\n\nFurther back, you remember:\n{long_ago}"
     return text
 
 
@@ -169,6 +201,9 @@ class World:
                     self.logger.run_id, self.tick_count,
                     "resource_depleted", None,
                     f"{r.drive.value} node at {r.location} depleted"))
+                remember_long_term(agent,
+                    f"tick {self.tick_count}: the {r.drive.value} resource at "
+                    f"{r.location} ran out while you were there")
             return f"consumed {r.drive.value} resource at {agent.location}"
 
         if action.startswith("move:"):
@@ -195,6 +230,13 @@ class World:
             target_agent.recent_memories.append(
                 f"tick {self.tick_count}: {agent.agent_id} approached you and "
                 f"described themself as -- {agent.history.current.as_prompt_block()}")
+            # Social contact persists long-term for both parties (a short tag,
+            # not the full exchange -- that's what recent_memories is for) so a
+            # much later reflection can still recall THAT a conversation
+            # happened, even once the tick-level detail has drained.
+            remember_long_term(agent, f"tick {self.tick_count}: talked with {target_id}")
+            remember_long_term(target_agent,
+                f"tick {self.tick_count}: {agent.agent_id} approached and talked with you")
             target_snippet = target_agent.history.current.as_prompt_block()
             return (f"talked with {target_id}, who described themself as -- "
                     f"{target_snippet}")
@@ -242,6 +284,10 @@ class World:
                 # react near the moment of the scare.
                 scheduled = self.tick_count % reflect_every == 0
                 crisis_triggered = agent.drives.in_crisis() and not was_in_crisis
+                if crisis_triggered:
+                    remember_long_term(agent,
+                        f"tick {self.tick_count}: nearly died from "
+                        f"{'/'.join(agent.drives.crisis_drives())}")
                 if reflect_fn and (scheduled or crisis_triggered):
                     reflect_fn(agent, perceived, outcome, self.tick_count,
                               reason=("crisis" if crisis_triggered else "scheduled"))
