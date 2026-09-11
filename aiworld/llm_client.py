@@ -29,7 +29,7 @@ import requests
 @dataclasses.dataclass
 class LLMConfig:
     base_url: str = "http://localhost:11434/v1"   # Ollama default
-    model: str = "qwen3.6:35b"
+    model: str = "huihui_ai/mistral-small-abliterated:24b"
     api_key: str = "not-needed-for-local"          # local servers ignore this
     temperature: float = 0.8      # some stochasticity: identical agents must be able
                                   # to diverge. Too low collapses them; too high is noise.
@@ -129,7 +129,7 @@ def config_from_env() -> LLMConfig:
            else os.getenv("AIWORLD_API_KEY", "not-needed-for-local"))
     return LLMConfig(
         base_url=os.getenv("AIWORLD_BASE_URL", default_base),
-        model=os.getenv("AIWORLD_MODEL", "qwen3.6:35b"),
+        model=os.getenv("AIWORLD_MODEL", "huihui_ai/mistral-small-abliterated:24b"),
         api_key=key or "not-needed-for-local",
         temperature=float(os.getenv("AIWORLD_TEMPERATURE", "0.8")),
         provider=provider,

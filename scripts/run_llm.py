@@ -4,7 +4,8 @@ Everything routes through one LLMClient, so this runs identically against:
   - a local model on your GPU (Ollama/vLLM, the default), or
   - a hosted API (set the AIWORLD_* env vars, see llm_client.config_from_env).
 
-Usage (local Ollama, after `ollama serve` + `ollama pull qwen3.6:35b-q6_K`):
+Usage (local Ollama, after `ollama serve` +
+`ollama pull huihui_ai/mistral-small-abliterated:24b`):
     python scripts/run_llm.py --agents 6 --ticks 30 --run-id live01
 
 Prompt template for reflection is chosen by --prompt {flat,leading}. Use 'flat' for

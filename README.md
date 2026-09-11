@@ -56,10 +56,13 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Default backend is a **local model via Ollama** — no API key needed. Pull a model
-(the config default is `ollama pull qwen3.6:35b`) and it's used automatically. To use
-a hosted provider instead, copy `.env.example` to `.env`, fill in the relevant key,
-and set `AIWORLD_PROVIDER` / `AIWORLD_BASE_URL` / `AIWORLD_MODEL`
+Default backend is a **local model via Ollama** — no API key needed. Pull the
+default model (`ollama pull huihui_ai/mistral-small-abliterated:24b`) and it's used
+automatically; abliterated so it isn't steered by refusal/safety-tuning artifacts
+when deciding what to do, which matters here since we don't want the model's action
+choices contaminated by anything beyond the shared directive. To use a different
+model or a hosted provider instead, copy `.env.example` to `.env`, fill in the
+relevant key, and set `AIWORLD_PROVIDER` / `AIWORLD_BASE_URL` / `AIWORLD_MODEL`
 (see `aiworld/llm_client.py:config_from_env`).
 
 ## Running
