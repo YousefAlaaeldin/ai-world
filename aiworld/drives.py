@@ -87,14 +87,21 @@ class DriveSystem:
         self.cause_of_death: str | None = None
         self.died_at_tick: int | None = None
 
-    def step(self, tick: int) -> None:
-        """Advance all drives one tick and check mortality."""
+    def step(self, tick: int, mortality: bool = True) -> None:
+        """Advance all drives one tick and check mortality.
+
+        `mortality=False` (immortal runs, DESIGN.md §4) still lets drives climb to
+        and cap at crisis level -- so salience still spikes, the agent still feels
+        it -- it just never actually kills. Without this, a config's
+        `mortality: false` only suppressed death/extinction *logging*; drives kept
+        killing agents anyway.
+        """
         if not self.alive:
             return
         for kind, state in self.states.items():
             spec = self.specs[kind]
             state.tick(spec)
-            if state.is_lethal_now(spec):
+            if mortality and state.is_lethal_now(spec):
                 self.alive = False
                 self.cause_of_death = kind.value
                 self.died_at_tick = tick

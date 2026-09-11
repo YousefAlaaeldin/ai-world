@@ -29,6 +29,9 @@ Ordered so each phase is runnable and answers something before the next is built
 - [ ] Causal trace tool: link self-model deltas to triggering events
 
 ## Phase 3 — Experiments
+- [x] Null/baseline environment config exists (`configs/experiment_null_baseline.yaml`)
+      for the coarse "does environment matter at all" omnibus test — run it before
+      the single-factor contrasts below (see DESIGN.md §6)
 - [ ] Run the confound controls FIRST (vary reflection prompt, flat control)
 - [ ] Mortality on/off contrast
 - [ ] Scarcity contrast

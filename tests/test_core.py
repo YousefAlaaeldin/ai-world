@@ -12,7 +12,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from aiworld.drives import DriveSystem, DriveKind, DriveSpec  # noqa: E402
 from aiworld.self_model import SelfModel, SelfModelHistory, SHARED_DIRECTIVE  # noqa: E402
 from aiworld.salience import Observation, rank_observations  # noqa: E402
-from aiworld.sim.world import Agent, agent_recent_memories  # noqa: E402
+from aiworld.sim.world import Agent, World, ResourceNode, agent_recent_memories  # noqa: E402
+from aiworld.logging_schema import RunLogger  # noqa: E402
+from aiworld.config import initial_locations  # noqa: E402
+import random  # noqa: E402
 
 
 # ---- drives & mortality ----
@@ -43,6 +46,15 @@ def test_lethal_drive_kills_agent():
     assert not ds.alive
     assert ds.cause_of_death in {"hunger", "thirst"}
     assert ds.died_at_tick is not None
+
+
+def test_immortal_mode_never_kills():
+    ds = DriveSystem()
+    for t in range(200):
+        ds.step(tick=t, mortality=False)
+    assert ds.alive
+    assert ds.states[DriveKind.HUNGER].level == 1.0  # still hits crisis level...
+    assert ds.states[DriveKind.THIRST].level == 1.0  # ...just never dies from it
 
 
 def test_affiliation_is_not_lethal():
@@ -124,6 +136,35 @@ def test_recent_memories_drain_after_read():
 def test_recent_memories_empty_has_sane_fallback():
     agent = Agent("agent_0", "north", DriveSystem(), SelfModelHistory("agent_0"))
     assert agent_recent_memories(agent) == "(nothing notable happened)"
+
+
+def test_consume_picks_most_urgent_matching_resource(tmp_path):
+    # Two resource types co-located -- the exact shape that starved agents
+    # before the fix (consume always grabbed the first-listed resource).
+    resources = [ResourceNode("loc", DriveKind.HUNGER, quantity=10),
+                ResourceNode("loc", DriveKind.THIRST, quantity=10)]
+    agent = Agent("a0", "loc", DriveSystem(), SelfModelHistory("a0"))
+    agent.drives.states[DriveKind.THIRST].level = 0.9
+    agent.drives.states[DriveKind.HUNGER].level = 0.1
+    logger = RunLogger("test_consume", root=str(tmp_path))
+    world = World(["loc"], resources, [agent], logger)
+    outcome = world.resolve_action(agent, "consume")
+    logger.close()
+    assert "thirst" in outcome
+
+
+def test_initial_locations_isolates_when_enough_locations():
+    rng = random.Random(0)
+    locs = initial_locations(rng, ["a", "b", "c", "d", "e", "f"], 6)
+    assert len(locs) == 6
+    assert len(set(locs)) == 6  # every agent gets a distinct location
+
+
+def test_initial_locations_allows_collision_when_scarce():
+    rng = random.Random(0)
+    locs = initial_locations(rng, ["a", "b"], 6)
+    assert len(locs) == 6
+    assert all(l in ("a", "b") for l in locs)
 
 
 def test_salience_reweights_never_hides():

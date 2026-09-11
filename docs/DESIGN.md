@@ -79,6 +79,15 @@ running:
 Each condition: multiple trials, varied seeds, a control. n=1 means nothing with
 stochastic agents.
 
+Before dissecting *which* factor matters, run the coarse omnibus test first:
+`configs/experiment_null_baseline.yaml` strips mortality, scarcity, and forced
+co-location all at once (abundant resources, mortality off, agents isolated
+one-per-location) and pairs against `configs/experiment_minimal.yaml` across the
+same seeds. Comparable divergence in both ⇒ the environment isn't doing anything
+yet and the single-factor contrasts below aren't worth running. Lower divergence
+in the null arm ⇒ environment matters, now isolate which factor with the on/off
+contrasts.
+
 ## 7. Measurement layer (borrowed from MACHIAVELLI)
 
 MACHIAVELLI is a benchmark we can't run our open sim inside, but its **method** transfers:

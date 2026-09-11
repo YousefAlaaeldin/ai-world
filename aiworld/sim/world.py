@@ -121,17 +121,24 @@ class World:
     def resolve_action(self, agent: Agent, action: str) -> str:
         """Apply an action to world state, return a short outcome description."""
         if action == "consume":
-            for r in self.resources:
-                if r.location == agent.location and r.quantity > 0:
-                    agent.drives.satisfy(r.drive)
-                    r.quantity -= 1
-                    if r.quantity == 0:
-                        self.logger.log_event(EventRecord(
-                            self.logger.run_id, self.tick_count,
-                            "resource_depleted", None,
-                            f"{r.drive.value} node at {r.location} depleted"))
-                    return f"consumed {r.drive.value} resource at {agent.location}"
-            return "tried to consume but found nothing here"
+            candidates = [r for r in self.resources
+                         if r.location == agent.location and r.quantity > 0]
+            if not candidates:
+                return "tried to consume but found nothing here"
+            # When multiple resource types are present, consume whichever
+            # matches the agent's currently most urgent drive -- not just
+            # whichever happens to be listed first in the resources list. Picking
+            # by list order silently starved agents on a co-located second drive
+            # (e.g. always eating, never drinking, when both are here).
+            r = max(candidates, key=lambda res: agent.drives.states[res.drive].level)
+            agent.drives.satisfy(r.drive)
+            r.quantity -= 1
+            if r.quantity == 0:
+                self.logger.log_event(EventRecord(
+                    self.logger.run_id, self.tick_count,
+                    "resource_depleted", None,
+                    f"{r.drive.value} node at {r.location} depleted"))
+            return f"consumed {r.drive.value} resource at {agent.location}"
 
         if action.startswith("move:"):
             dest = action.split(":", 1)[1]
@@ -174,7 +181,7 @@ class World:
                     reflect_fn(agent, perceived, outcome, self.tick_count)
 
                 # Advance body AFTER acting, then check mortality.
-                agent.drives.step(self.tick_count)
+                agent.drives.step(self.tick_count, mortality=self.mortality)
                 if not agent.drives.alive and self.mortality:
                     self.logger.log_event(EventRecord(
                         self.logger.run_id, self.tick_count, "death",

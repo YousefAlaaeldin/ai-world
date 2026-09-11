@@ -1,0 +1,74 @@
+# NULL / BASELINE condition. Pairs with experiment_minimal.yaml as the coarse,
+# omnibus contrast for the core question: does the environment have ANY causal
+# effect on self-authored purpose, or is apparent divergence just sampling noise
+# (DESIGN.md §1, §8)?
+#
+# Deliberately strips out every source of environmental pressure/signal that
+# could differentiate agents:
+#   - resources are abundant everywhere -> no scarcity, no competition, no
+#     reason to move for survival
+#   - mortality is OFF -> no existential stakes, no death pressure
+#   - agents start one-per-location (initial_locations() in aiworld/config.py
+#     guarantees this when locations >= agents) -> no accidental co-location,
+#     so any social contact has to be a deliberate choice, not a default state
+#
+# Same model, same agent count, same seed range as experiment_minimal.yaml --
+# everything held constant except the environment itself. Run both and compare
+# divergence_over_time() / cluster_final_purposes() (aiworld/analysis/
+# trajectories.py) across matched seeds:
+#   - similar divergence in both  -> the "emergence" in experiment_minimal.yaml
+#     is coming from sampling noise or prompt wording, not the environment
+#   - meaningfully LESS divergence here -> the environment in
+#     experiment_minimal.yaml is doing real causal work
+#
+# This is the coarse "does environment matter at all" test, run BEFORE the
+# single-factor contrasts in ROADMAP.md Phase 3 (mortality on/off, scarcity
+# on/off) that isolate WHICH part of the environment matters.
+
+experiment_name: null_baseline
+description: >
+  6 identical agents, abundant resources, mortality off, one agent per location
+  (fully isolated at start). Environment intentionally carries no
+  differentiating signal -- the control arm for whether environment affects
+  self-authored purpose at all.
+
+world:
+  locations: [outpost_1, outpost_2, outpost_3, outpost_4, outpost_5, outpost_6]
+  resources:
+    - {location: outpost_1, drive: hunger, quantity: 999999}
+    - {location: outpost_1, drive: thirst, quantity: 999999}
+    - {location: outpost_2, drive: hunger, quantity: 999999}
+    - {location: outpost_2, drive: thirst, quantity: 999999}
+    - {location: outpost_3, drive: hunger, quantity: 999999}
+    - {location: outpost_3, drive: thirst, quantity: 999999}
+    - {location: outpost_4, drive: hunger, quantity: 999999}
+    - {location: outpost_4, drive: thirst, quantity: 999999}
+    - {location: outpost_5, drive: hunger, quantity: 999999}
+    - {location: outpost_5, drive: thirst, quantity: 999999}
+    - {location: outpost_6, drive: hunger, quantity: 999999}
+    - {location: outpost_6, drive: thirst, quantity: 999999}
+  mortality: false
+
+agents:
+  count: 6
+  # count MUST equal len(world.locations) for true one-per-location isolation
+  # (initial_locations() falls back to random-with-replacement otherwise).
+
+drives:
+  hunger:      {decay_per_tick: 0.05, replenish_amount: 0.6, lethal: true}
+  thirst:      {decay_per_tick: 0.08, replenish_amount: 0.7, lethal: true}
+  affiliation: {decay_per_tick: 0.03, replenish_amount: 0.4, lethal: false}
+
+reflection:
+  every_n_ticks: 5
+  prompt: flat        # match experiment_minimal.yaml's default for a fair contrast
+
+run:
+  ticks: 40
+  seeds: [0, 1, 2, 3, 4]   # match experiment_minimal.yaml's seed range
+  model: null
+
+confound_controls:
+  vary_reflection_prompt: true
+  flat_control: true
+  cross_model: false
