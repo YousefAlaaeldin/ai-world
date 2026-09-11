@@ -32,6 +32,9 @@ Ordered so each phase is runnable and answers something before the next is built
 - [x] Null/baseline environment config exists (`configs/experiment_null_baseline.yaml`)
       for the coarse "does environment matter at all" omnibus test — run it before
       the single-factor contrasts below (see DESIGN.md §6)
+- [x] Multi-seed orchestration (`scripts/run_sweep.py`) — runs every seed in a
+      config's `run.seeds` list, one `run_id` per seed under
+      `runs/<experiment_name>/seed_<k>/`, so any comparison has more than n=1
 - [ ] Run the confound controls FIRST (vary reflection prompt, flat control)
 - [ ] Mortality on/off contrast
 - [ ] Scarcity contrast

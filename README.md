@@ -76,10 +76,19 @@ python scripts/run_llm.py --run-id live01
 
 # Any config value can be overridden per-run, e.g.:
 python scripts/run_llm.py --run-id live02 --agents 8 --ticks 60 --prompt leading
+
+# A single run is one data point (DESIGN.md §6: "n=1 means nothing with
+# stochastic agents"). Sweep every seed in a config's run.seeds list instead:
+python scripts/run_sweep.py --config configs/experiment_minimal.yaml --policy llm
+
+# The environment-contrast pair (DESIGN.md §6/§9) — same seeds, environment
+# stripped of every differentiating signal, for "does environment matter at all":
+python scripts/run_sweep.py --config configs/experiment_null_baseline.yaml --policy llm
 ```
 
 Logs land in `runs/<run_id>/` (`self_models.jsonl`, `ticks.jsonl`, `events.jsonl`,
-`meta.json`) — git-ignored, since they're experiment output, not source.
+`meta.json`) — git-ignored, since they're experiment output, not source. A sweep
+writes one such directory per seed under `runs/<experiment_name>/seed_<k>/`.
 
 **Start small**: 5–8 agents, one resource, mortality on, ~20 repeat runs from the
 identical seed-state before adding any complexity.
