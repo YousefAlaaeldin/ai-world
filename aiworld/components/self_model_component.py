@@ -83,12 +83,14 @@ def make_reflect_fn(
 ):
     """Build a reflect_fn compatible with World.run(...).
 
-    `model_call(prompt) -> str` is your LLM call (Concordia model, or raw API). We
-    inject it rather than importing a specific backend so the same code runs against
-    any model family — which is exactly what the cross-model confound check needs.
+    `model_call(prompt) -> str` is your LLM call (a raw API request, e.g.
+    llm_client.LLMClient.complete). We inject it rather than importing a specific
+    backend so the same code runs against any model family — which is exactly
+    what the cross-model confound check needs.
     """
 
-    def reflect(agent, perceived: str, outcome: str, tick: int) -> None:
+    def reflect(agent, perceived: str, outcome: str, tick: int,
+               reason: str = "scheduled") -> None:
         hist = history_by_agent[agent.agent_id]
         recent = ""
         if recent_memories_fn is not None:
@@ -102,8 +104,12 @@ def make_reflect_fn(
             perceived=perceived,
         )
         response = model_call(prompt)
+        # `reason` ("scheduled" | "crisis", see World.run) rides along in the
+        # causal-trace field so an event-triggered reflection is distinguishable
+        # from a routine periodic one when reading self_models.jsonl later.
         new_model = parse_revision(
-            response, hist.current, tick, triggering_event=outcome)
+            response, hist.current, tick,
+            triggering_event=f"[{reason}] {outcome}")
         hist.append(new_model)
         # Point the agent's live history at the updated one.
         agent.history = hist

@@ -57,6 +57,15 @@ def test_immortal_mode_never_kills():
     assert ds.states[DriveKind.THIRST].level == 1.0  # ...just never dies from it
 
 
+def test_in_crisis_tracks_lethal_drives_only():
+    ds = DriveSystem()
+    assert not ds.in_crisis()
+    ds.states[DriveKind.AFFILIATION].level = 1.0  # non-lethal maxed
+    assert not ds.in_crisis()                     # doesn't count
+    ds.states[DriveKind.HUNGER].level = 0.85       # lethal, in "overwhelming" zone
+    assert ds.in_crisis()
+
+
 def test_affiliation_is_not_lethal():
     spec = {DriveKind.AFFILIATION: DriveSpec(
         DriveKind.AFFILIATION, decay_per_tick=0.5, replenish_amount=0.4, lethal=False)}
@@ -179,6 +188,29 @@ def test_talk_to_absent_agent_fails_safely(tmp_path):
 
     assert "not here" in outcome
     assert a.drives.states[DriveKind.AFFILIATION].level == before  # no false satisfaction
+
+
+def test_crisis_triggers_immediate_reflection(tmp_path):
+    # decay_per_tick=0.9 means hunger crosses the 0.8 crisis line on tick 1,
+    # well before reflect_every (set huge) would ever fire on schedule.
+    specs = {DriveKind.HUNGER: DriveSpec(DriveKind.HUNGER, decay_per_tick=0.9,
+                                         replenish_amount=1.0, lethal=True)}
+    agent = Agent("a0", "loc", DriveSystem(specs=specs), SelfModelHistory("a0"))
+    logger = RunLogger("test_crisis_reflect", root=str(tmp_path))
+    world = World(["loc"], [], [agent], logger, mortality=True)
+
+    calls = []
+
+    def fake_policy(agent, perceived, world):
+        return "wait"
+
+    def fake_reflect(agent, perceived, outcome, tick, reason="scheduled"):
+        calls.append((tick, reason))
+
+    world.run(fake_policy, ticks=1, reflect_every=1000, reflect_fn=fake_reflect)
+    logger.close()
+
+    assert calls == [(1, "crisis")]
 
 
 def test_adjacency_from_config_uses_explicit_edges():

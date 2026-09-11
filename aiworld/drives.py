@@ -111,6 +111,17 @@ class DriveSystem:
         if kind in self.states:
             self.states[kind].replenish(self.specs[kind])
 
+    def in_crisis(self) -> bool:
+        """True if any LETHAL drive is in 'overwhelming' territory (>= CRISIS_LEVEL,
+        matching the _describe() threshold below) -- the near-death zone. Used to
+        trigger an immediate reflection instead of waiting for the next scheduled
+        one (DESIGN.md §5.4 wants causal traces like "became a protector after a
+        near-death rescue," which needs the self-model to react near the scare,
+        not up to reflect_every-1 ticks later). Non-lethal drives (affiliation)
+        never count -- there's no near-death moment to react to there."""
+        return any(self.specs[k].lethal and s.level >= CRISIS_LEVEL
+                  for k, s in self.states.items())
+
     def salience_biases(self) -> dict[DriveKind, float]:
         """Per-drive perception weights, consumed by the salience layer."""
         return {k: s.salience_weight() for k, s in self.states.items()}
@@ -130,11 +141,14 @@ class DriveSystem:
         return {k.value: round(s.level, 4) for k, s in self.states.items()}
 
 
+CRISIS_LEVEL = 0.8  # the "overwhelming" threshold -- also what DriveSystem.in_crisis() checks
+
+
 def _describe(level: float) -> str:
     if level < 0.2:
         return "not noticeable"
     if level < 0.5:
         return "mild"
-    if level < 0.8:
+    if level < CRISIS_LEVEL:
         return "strong"
     return "overwhelming"

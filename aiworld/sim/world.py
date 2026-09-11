@@ -223,9 +223,7 @@ class World:
                 agent.recent_memories.append(
                     f"tick {self.tick_count}: did '{action}' -> {outcome}")
 
-                # Optional reflection (self-model revision) — LLM-backed in reality.
-                if reflect_fn and self.tick_count % reflect_every == 0:
-                    reflect_fn(agent, perceived, outcome, self.tick_count)
+                was_in_crisis = agent.drives.in_crisis()
 
                 # Advance body AFTER acting, then check mortality.
                 agent.drives.step(self.tick_count, mortality=self.mortality)
@@ -234,6 +232,19 @@ class World:
                         self.logger.run_id, self.tick_count, "death",
                         agent.agent_id,
                         f"died of {agent.drives.cause_of_death}"))
+
+                # Reflection: on schedule, OR immediately if a lethal drive just
+                # crossed into crisis territory for the first time since it last
+                # cleared. Without the crisis trigger, a near-death scare could
+                # sit unprocessed for up to reflect_every-1 ticks -- DESIGN.md
+                # §5.4 wants causal traces like "became a protector after a
+                # near-death rescue," which needs the self-model to actually
+                # react near the moment of the scare.
+                scheduled = self.tick_count % reflect_every == 0
+                crisis_triggered = agent.drives.in_crisis() and not was_in_crisis
+                if reflect_fn and (scheduled or crisis_triggered):
+                    reflect_fn(agent, perceived, outcome, self.tick_count,
+                              reason=("crisis" if crisis_triggered else "scheduled"))
 
                 self.logger.log_tick(TickRecord(
                     run_id=self.logger.run_id,
