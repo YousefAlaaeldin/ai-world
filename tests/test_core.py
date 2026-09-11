@@ -153,6 +153,34 @@ def test_consume_picks_most_urgent_matching_resource(tmp_path):
     assert "thirst" in outcome
 
 
+def test_talk_exchanges_self_model_content(tmp_path):
+    a = Agent("a0", "loc", DriveSystem(), SelfModelHistory("a0"))
+    b = Agent("a1", "loc", DriveSystem(), SelfModelHistory("a1"))
+    b.history.append(b.history.current.revise(who_i_am="a wanderer", tick=1))
+    logger = RunLogger("test_talk", root=str(tmp_path))
+    world = World(["loc"], [], [a, b], logger)
+
+    outcome = world.resolve_action(a, "talk:a1")
+    logger.close()
+
+    assert "a wanderer" in outcome                                # a learns b's identity
+    assert any("a0 approached you" in m for m in b.recent_memories)  # b was notified
+    assert not any("a wanderer" in m for m in b.recent_memories)  # b isn't told its own identity
+
+
+def test_talk_to_absent_agent_fails_safely(tmp_path):
+    a = Agent("a0", "loc", DriveSystem(), SelfModelHistory("a0"))
+    logger = RunLogger("test_talk_absent", root=str(tmp_path))
+    world = World(["loc"], [], [a], logger)
+
+    before = a.drives.states[DriveKind.AFFILIATION].level
+    outcome = world.resolve_action(a, "talk:ghost")
+    logger.close()
+
+    assert "not here" in outcome
+    assert a.drives.states[DriveKind.AFFILIATION].level == before  # no false satisfaction
+
+
 def test_initial_locations_isolates_when_enough_locations():
     rng = random.Random(0)
     locs = initial_locations(rng, ["a", "b", "c", "d", "e", "f"], 6)

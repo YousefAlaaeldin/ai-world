@@ -148,9 +148,25 @@ class World:
             return f"tried to move to unknown place {dest}"
 
         if action.startswith("talk:"):
-            target = action.split(":", 1)[1]
+            target_id = action.split(":", 1)[1]
+            target_agent = next(
+                (a for a in self.agents if a.agent_id == target_id), None)
+            if (target_agent is None or target_agent.location != agent.location
+                    or not target_agent.drives.alive):
+                return f"tried to talk to {target_id} but they were not here"
+            # A real information channel, not just a drive tick: each party is
+            # exposed to a snippet of the other's self-authored identity via
+            # recent_memories, so it can actually surface at the next
+            # reflection. Previously `talk` only satisfied the affiliation
+            # drive with no content exchanged -- one agent's purpose could
+            # never influence another's through this action at all.
             agent.drives.satisfy(DriveKind.AFFILIATION)
-            return f"talked with {target}"
+            target_agent.recent_memories.append(
+                f"tick {self.tick_count}: {agent.agent_id} approached you and "
+                f"described themself as -- {agent.history.current.as_prompt_block()}")
+            target_snippet = target_agent.history.current.as_prompt_block()
+            return (f"talked with {target_id}, who described themself as -- "
+                    f"{target_snippet}")
 
         if action == "reflect":
             return "paused to reflect"
