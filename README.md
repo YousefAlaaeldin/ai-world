@@ -90,5 +90,28 @@ Logs land in `runs/<run_id>/` (`self_models.jsonl`, `ticks.jsonl`, `events.jsonl
 `meta.json`) — git-ignored, since they're experiment output, not source. A sweep
 writes one such directory per seed under `runs/<experiment_name>/seed_<k>/`.
 
+## Analysis
+
+```bash
+# Divergence over time for one run, or purpose-clusters across a sweep:
+python scripts/analyze_run.py --run runs/live01
+python scripts/analyze_run.py --sweep runs/minimal_divergence --clusters 5
+
+# MACHIAVELLI-style behavior tags over the action log (free heuristic by
+# default; --llm fills in whatever it can't confidently place):
+python scripts/tag_behaviors.py --run runs/live01
+python scripts/tag_behaviors.py --run runs/live01 --llm
+
+# Link each self-model change to what plausibly caused it (free reconstruction
+# from the logs; --narrate adds the model's own one-sentence causal guess):
+python scripts/trace_causes.py --run runs/live01
+python scripts/trace_causes.py --run runs/live01 --narrate
+```
+
+All four tools default to zero LLM cost — they read the JSONL logs directly.
+Anything that does call the model is explicit opt-in (`--llm`, `--narrate`) and
+its output is always labeled as something to hand-verify, never ground truth
+(DESIGN.md §7).
+
 **Start small**: 5–8 agents, one resource, mortality on, ~20 repeat runs from the
 identical seed-state before adding any complexity.

@@ -30,10 +30,21 @@ Ordered so each phase is runnable and answers something before the next is built
       *runs* end-to-end and produces sane self-model revisions before trusting output.
 
 ## Phase 2 — Measurement
-- [ ] Embed self-model versions, compute trajectory + divergence metrics
-- [ ] Cluster stabilized self-models, auto-label clusters
-- [ ] LLM behavior-tagger over action logs (MACHIAVELLI-style ontology)
-- [ ] Causal trace tool: link self-model deltas to triggering events
+- [x] Embed self-model versions, compute trajectory + divergence metrics
+      (`scripts/analyze_run.py --run`, `aiworld.analysis.trajectories`)
+- [x] Cluster stabilized self-models (`scripts/analyze_run.py --sweep`) — computes
+      membership and recurrence-across-seeds; auto-*labeling* (naming clusters
+      "hoarder"/"caretaker"/etc.) stays manual by design, DESIGN.md §7: always
+      hand-verify a sample of automated tags
+- [x] Behavior-tagger over action logs (MACHIAVELLI-style ontology,
+      `scripts/tag_behaviors.py`, `aiworld.analysis.behavior_tags`) — free
+      deterministic heuristic tier by default, optional `--llm` tier fills in
+      whatever the heuristic can't confidently place
+- [x] Causal trace tool (`scripts/trace_causes.py`, `aiworld.analysis.causal_trace`)
+      — links every self-model delta to the triggering event + actions/world
+      events in the tick window since the previous reflection, purely from
+      existing logs; optional `--narrate` asks the model for a one-sentence
+      causal hypothesis, always labeled as a guess to hand-verify
 
 ## Phase 3 — Experiments
 - [x] Null/baseline environment config exists (`configs/experiment_null_baseline.yaml`)

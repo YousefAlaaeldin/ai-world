@@ -38,14 +38,21 @@ class FakeClient:
 
     def complete(self, prompt, system=None):
         self.n_calls += 1
-        # Reflection prompts contain the three-line scaffold.
-        if "What matters to me:" in prompt and "Who I am:" in prompt:
-            who, matters, want = self.rng.choice(self._identities)
-            return (f"Who I am: {who}\n"
-                    f"What matters to me: {matters}\n"
-                    f"What I want now: {want}")
-        # Otherwise it's an action prompt.
-        return self.rng.choice(["consume", "move:center", "wait", "move:north"])
+        # Action prompts (components/llm_policy.py:_build_action_prompt) end
+        # with "Your action:" -- a unique marker. They can't be told apart by
+        # "Who I am:"/"What matters to me:" alone, since EVERY prompt embeds
+        # the current self-model block at the top (as_prompt_block()), so that
+        # check used to match action prompts too and silently made every
+        # action come back as an unparseable identity string -- which
+        # parse_action falls back to "wait" for. That went unnoticed because
+        # the only assertion here is about self-model divergence, never
+        # action variety.
+        if "Your action:" in prompt:
+            return self.rng.choice(["consume", "move:center", "wait", "move:north"])
+        who, matters, want = self.rng.choice(self._identities)
+        return (f"Who I am: {who}\n"
+                f"What matters to me: {matters}\n"
+                f"What I want now: {want}")
 
     def stats(self):
         return {"n_calls": self.n_calls}

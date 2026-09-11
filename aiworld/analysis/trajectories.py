@@ -40,9 +40,7 @@ def tfidf_embed_fn(texts: list[str]) -> np.ndarray:
     return np.asarray(mat.todense())
 
 
-def load_self_models(run_dir: str) -> list[dict]:
-    """Load all self-model versions logged in a run."""
-    path = os.path.join(run_dir, "self_models.jsonl")
+def _load_jsonl(path: str) -> list[dict]:
     records = []
     if not os.path.exists(path):
         return records
@@ -52,6 +50,24 @@ def load_self_models(run_dir: str) -> list[dict]:
             if line:
                 records.append(json.loads(line))
     return records
+
+
+def load_self_models(run_dir: str) -> list[dict]:
+    """Load all self-model versions logged in a run."""
+    return _load_jsonl(os.path.join(run_dir, "self_models.jsonl"))
+
+
+def load_ticks(run_dir: str) -> list[dict]:
+    """Load all per-tick records logged in a run (aiworld.logging_schema.TickRecord).
+    Used by aiworld.analysis.behavior_tags and .causal_trace -- kept here so both
+    share one loader instead of duplicating the read loop.
+    """
+    return _load_jsonl(os.path.join(run_dir, "ticks.jsonl"))
+
+
+def load_events(run_dir: str) -> list[dict]:
+    """Load all world events logged in a run (aiworld.logging_schema.EventRecord)."""
+    return _load_jsonl(os.path.join(run_dir, "events.jsonl"))
 
 
 def _embedding_text(rec: dict) -> str:
