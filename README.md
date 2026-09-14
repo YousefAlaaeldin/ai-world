@@ -1,34 +1,25 @@
 # AI World
 
-An open-ended, multi-agent simulation experiment. Agents begin **identical**, with a
-single shared directive — *"survive and find your purpose"* — no assigned identity, no
-assigned goal. Their character is a mutable document they author and revise from
-experience. The research question is not "do agents follow their role?" but **"what do
-agents become when nothing is assigned?"**
+AI World is a pre-data, multi-agent LLM simulation for studying **behavioral
+organization under no experimenter-specified distal goal**. It is not a test of
+whether a model has an intrinsic purpose or is a blank slate: the world imposes
+resource, mortality, action-language, and model-prior constraints.
 
-Originally scoped as a [DeepMind Concordia](https://github.com/google-deepmind/concordia)
-extension; the design settled instead on a small custom tick-loop engine
-(`aiworld/sim/world.py`) that resolves actions itself (a Game-Master equivalent) and
-runs against a **local model via [Ollama](https://ollama.com)** — no hosted API
-dependency, full control over the mechanics, and testable end-to-end with zero model
-calls. The novel contribution is a `SelfModel` component (identity as a state
-variable the agent writes to) and a `Drive` system (hunger, thirst, affiliation) that
-biases *attention*, not behavior — so purpose stays genuinely open.
+The question is:
 
-## The central hypothesis
+> When an LLM agent receives no experimenter-specified identity, value hierarchy,
+> or distal goal, can an objective record of experience support stable,
+> state-conditioned behavioral commitments?
 
-Identical initial conditions → divergent trajectories. If self-models converge to a
-monoculture, the "freedom" is illusory (environment or prompt is deterministic). If they
-diverge, **the divergence pattern is the result** — and recurring purpose-clusters across
-independent runs would be the headline finding.
+Read [the canonical protocol](docs/EXPERIMENT_PROTOCOL.md) before running or
+interpreting an experiment. It defines the condition matrix, replication unit, claim
+boundary, and evidence required for a stronger commitment claim.
 
 ## Status
 
-Phase 0 complete (mechanics + logging, 12/12 unit tests passing). Phase 1 in
-progress: the tick loop, action resolution, and reflection step all run end-to-end
-against the stub (no-LLM) policy; a live run against a local model is next. See
-`docs/DESIGN.md` for the full experimental design and `docs/ROADMAP.md` for build
-order.
+This is a research platform and pilot protocol, not a completed study. There are no
+live multi-seed LLM results in the workspace. Passing mechanics tests make a future
+run auditable; they do not constitute a research finding.
 
 ## Layout
 
@@ -56,71 +47,58 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Default backend is a **local model via Ollama** — no API key needed. Pull the
-default model (`ollama pull huihui_ai/mistral-small-abliterated:24b`) and it's used
-automatically; abliterated so it isn't steered by refusal/safety-tuning artifacts
-when deciding what to do, which matters here since we don't want the model's action
-choices contaminated by anything beyond the shared directive. To use a different
-model or a hosted provider instead, copy `.env.example` to `.env`, fill in the
-relevant key, and set `AIWORLD_PROVIDER` / `AIWORLD_BASE_URL` / `AIWORLD_MODEL`
-(see `aiworld/llm_client.py:config_from_env`).
+The default client targets a local Ollama-compatible endpoint. Copy `.env.example`
+to `.env` to choose a provider, endpoint, and model. Model family, model identifier,
+decoding settings, seed support, prompts, raw completions, and response metadata are
+saved in every run. Treat the selected model as an experimental treatment, not a
+neutral implementation detail.
 
 ## Running
 
 ```bash
-# Mechanics smoke test — no LLM, zero cost:
-python scripts/run_stub.py --run-id smoke01
+# Mechanics smoke test only; this is not a model result.
+python scripts/run_stub.py --config configs/experiment_factual_memory_unassigned.yaml --run-id smoke01
 
-# Real run against the local model, reading configs/experiment_minimal.yaml:
-python scripts/run_llm.py --run-id live01
+# One real world run in the primary unassigned-history condition.
+python scripts/run_llm.py --config configs/experiment_factual_memory_unassigned.yaml --run-id factual-seed0 --seed 0
 
-# Any config value can be overridden per-run, e.g.:
-python scripts/run_llm.py --run-id live02 --agents 8 --ticks 60 --prompt leading
+# A world run, not an agent or tick, is the independent replication unit.
+python scripts/run_sweep.py --config configs/experiment_factual_memory_unassigned.yaml --policy llm
 
-# A single run is one data point (DESIGN.md §6: "n=1 means nothing with
-# stochastic agents"). Sweep every seed in a config's run.seeds list instead:
-python scripts/run_sweep.py --config configs/experiment_minimal.yaml --policy llm
+# Paired static-context control: frozen prompt, no actions resolved. These are
+# proposal-only records and must not be pooled with world behavior.
+python scripts/run_sweep.py --config configs/experiment_factual_memory_unassigned.yaml --policy sampling-null
 
-# The environment-contrast pair (DESIGN.md §6/§9) — same seeds, environment
-# stripped of every differentiating signal, for "does environment matter at all":
-python scripts/run_sweep.py --config configs/experiment_null_baseline.yaml --policy llm
+# Matched negative-control and self-conditioning comparisons.
+python scripts/run_sweep.py --config configs/experiment_deprimed_baseline.yaml --policy llm
+python scripts/run_sweep.py --config configs/experiment_self_narrative_unassigned.yaml --policy llm
 ```
 
 Logs land in `runs/<run_id>/` (`self_models.jsonl`, `ticks.jsonl`, `events.jsonl`,
-`meta.json`) — git-ignored, since they're experiment output, not source. A sweep
-writes one such directory per seed under `runs/<experiment_name>/seed_<k>/`.
+`completions.jsonl`, `meta.json`) — git-ignored, since they're experiment output,
+not source. A sweep writes one directory per seed under
+`runs/<experiment_name>/<policy-prompt-config-hash>/seed_<k>/`.
 
 ## Analysis
 
 ```bash
-# BEHAVIORAL organization — what agents DO (the primary outcome for the
-# "emergent behavioral organization under unassigned objectives" claim, and the
-# only thing the de-primed baseline produces). Per-agent behavioral fingerprint +
-# behavioral divergence over time; --sweep clusters whole-run behavior with the
-# cluster count chosen by silhouette (not a forced k) against a null baseline:
-python scripts/analyze_behavior.py --run runs/live01
-python scripts/analyze_behavior.py --sweep runs/minimal_divergence
+# Per-run behavior: pre-action context, proposals, parser failures, and realized
+# outcomes are kept distinct in the output.
+python scripts/analyze_behavior.py --run runs/<experiment>/<condition>/seed_0
 
-# Divergence over time for one run, or purpose-clusters across a sweep, on the
-# self-model TEXT (a self-narrative-arm outcome, not the de-primed baseline):
-python scripts/analyze_run.py --run runs/live01
-python scripts/analyze_run.py --sweep runs/minimal_divergence --clusters 5
+# Exploratory clustering across independent world runs in one condition.
+python scripts/analyze_behavior.py --sweep runs/<experiment>/<condition>
 
-# MACHIAVELLI-style behavior tags over the action log (free heuristic by
-# default; --llm fills in whatever it can't confidently place):
-python scripts/tag_behaviors.py --run runs/live01
-python scripts/tag_behaviors.py --run runs/live01 --llm
+# A pre-specified, paired condition contrast at the world-run level. Agents and
+# ticks are nested observations, not the sample size.
+python scripts/compare_conditions.py --left runs/<left>/<condition> --right runs/<right>/<condition> --metric behavioral_dispersion
 
-# Link each self-model change to what plausibly caused it (free reconstruction
-# from the logs; --narrate adds the model's own one-sentence causal guess):
-python scripts/trace_causes.py --run runs/live01
-python scripts/trace_causes.py --run runs/live01 --narrate
+# Self-model text applies only to self-narrative / primed treatments and is
+# secondary evidence, never proof of purpose by itself.
+python scripts/analyze_run.py --run runs/<experiment>/<condition>/seed_0
 ```
 
-All five tools default to zero LLM cost — they read the JSONL logs directly.
-Anything that does call the model is explicit opt-in (`--llm`, `--narrate`) and
-its output is always labeled as something to hand-verify, never ground truth
-(DESIGN.md §7).
-
-**Start small**: 5–8 agents, one resource, mortality on, ~20 repeat runs from the
-identical seed-state before adding any complexity.
+Behavior tags, narration, causal traces, and clusters are hypothesis-generating
+tools. They are not causal proof or evidence of an inner goal. Do not call a pattern
+an emergent commitment until it passes the held-out, opportunity-conditioned,
+run-level checks in the canonical protocol.

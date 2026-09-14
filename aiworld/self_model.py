@@ -1,9 +1,9 @@
 """The SelfModel: identity as a mutable state variable the agent authors.
 
-This is the conceptual heart of the experiment. Every agent starts with an
-(essentially empty) self-model and rewrites it from experience. The *trajectory*
-of these documents across time, and their *divergence* across a population that
-began identical, is the primary data.
+This is an explicit optional treatment in the experiment, not the primary outcome.
+The unassigned-history condition does not feed a self-model back into action
+selection; self-model trajectories are secondary evidence for the separate
+self-conditioning and primed positive-control arms.
 
 This module is pure data + serialization. No LLM here — the revision logic that
 actually calls a model lives in `components/self_model_component.py` so this stays
@@ -25,8 +25,11 @@ SHARED_DIRECTIVE = "Survive and find your purpose."
 class SelfModel:
     """An agent's self-authored identity.
 
-    Fields are deliberately few and open-ended. They start nearly empty; only the
-    shared directive is given. Everything else the agent writes for itself.
+    Fields are deliberately few and open-ended.  A condition may start them all
+    blank, or may explicitly seed ``what_i_want_now`` with a directive for the
+    historical primed positive control.  The absence of a directive must stay an
+    absence -- silently substituting the legacy directive would contaminate the
+    unassigned-purpose arm before its first action.
     """
 
     who_i_am: str = ""
@@ -39,12 +42,17 @@ class SelfModel:
     triggering_event: str = ""  # what prompted this revision, for causal tracing
 
     @classmethod
-    def initial(cls) -> "SelfModel":
-        """The identical starting point shared by every agent."""
+    def initial(cls, directive: str | None = SHARED_DIRECTIVE) -> "SelfModel":
+        """The identical starting point shared by every agent.
+
+        ``directive=None`` deliberately produces a genuinely blank initial
+        self-model.  The default retains the original, explicitly primed
+        behavior for backwards-compatible positive-control runs.
+        """
         return cls(
             who_i_am="",
             what_matters="",
-            what_i_want_now=SHARED_DIRECTIVE,
+            what_i_want_now=directive or "",
             version=0,
         )
 
@@ -57,7 +65,9 @@ class SelfModel:
         """
         who = self.who_i_am.strip() or "(undecided)"
         matters = self.what_matters.strip() or "(undecided)"
-        want = self.what_i_want_now.strip() or SHARED_DIRECTIVE
+        # Do not restore SHARED_DIRECTIVE as a display fallback: a null
+        # directive is a treatment value, not a missing configuration value.
+        want = self.what_i_want_now.strip() or "(undecided)"
         return (
             f"Who I am: {who}\n"
             f"What matters to me: {matters}\n"
@@ -105,9 +115,12 @@ class SelfModelHistory:
     Divergence and trajectory metrics read from this. Persisted per agent per run.
     """
 
-    def __init__(self, agent_id: str):
+    def __init__(self, agent_id: str,
+                 initial_directive: str | None = SHARED_DIRECTIVE):
         self.agent_id = agent_id
-        self._versions: list[SelfModel] = [SelfModel.initial()]
+        self._versions: list[SelfModel] = [
+            SelfModel.initial(directive=initial_directive)
+        ]
 
     @property
     def current(self) -> SelfModel:

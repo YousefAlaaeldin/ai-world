@@ -1,12 +1,12 @@
 # Redesign Plan — de-primed baseline + behavioral measurement
 
-**Paper claim:** *"Emergent behavioral organization under unassigned objectives in
-LLM agents."* Note what this commits the work to: the outcome is **behavioral
-organization** (structure in what agents *do*), and "unassigned" is the load-bearing
-adjective — so the primary result must come from the de-primed baseline measured by
-behavior, not from self-report text under a "survive/find your purpose" directive.
-Tranche 3's metrics are what substantiate "behavioral organization"; Tranche 1's
-de-priming is what earns "unassigned."
+**Claim boundary:** *exploratory behavioral organization under no
+experimenter-specified distal goal in a specified LLM viability ecology.* The outcome
+is **behavioral organization** (structure in what agents *do*), while “unassigned”
+means no experimenter-specified identity, value hierarchy, or distal objective—not no
+model priors or ecological pressure. The primary result must come from the factual
+unassigned-history condition measured by behavior, not from self-report text under a
+“survive/find your purpose” directive.
 
 Driven by external review (see conversation 2026-09-14). The project's defensible
 question is **not** "agents with no priors" (no LLM is a blank slate) but:
@@ -150,6 +150,31 @@ paraphrase / held-out maps, (6) observable in behavior, not only self-descriptio
   draw in mortal/scarce arms. It can be enabled as a separately logged treatment;
   a just-died agent never reflects.
 
+### Tranche 6 — condition validity + decision/outcome measurement  ← DONE
+
+- [x] **True blank start for unassigned arms.** `directive: null` now initializes
+  and renders a blank v0 self-model; it can no longer fall back to the legacy
+  “Survive and find your purpose” text through `SelfModel.as_prompt_block()`.
+- [x] **Primary factual-history condition.**
+  `experiment_factual_memory_unassigned.yaml` supplies a capped, non-draining,
+  factual event ledger to actions while keeping directive and self-model feedback
+  off. The old no-history baseline remains the negative control; the new blank-start
+  self-narrative arm is an explicit self-conditioning treatment.
+- [x] **Static-context sampling control.** `run_sampling_null.py` repeats one frozen
+  paired initial action context without applying actions. Its proposal-only records
+  are refused by realized-behavior and moral-tag analysis, so they cannot silently
+  become survival or organization data.
+- [x] **Decision-state and realization logging.** Tick records now preserve
+  pre-action drives/position/inventory/opportunities, parser validity, proposed
+  action, and structured outcome success. Metrics use decision-time state, the full
+  configured map/horizon, and separate proposal from realized-action rates.
+- [x] **Canonical protocol.** `docs/EXPERIMENT_PROTOCOL.md` defines the scientific
+  claim boundary, condition matrix, independent unit, and required evidence gates;
+  legacy design/paper notes are explicitly marked historical.
+- [ ] Still required before a strong commitment/purpose result: held-out maps or
+  probes, branch perturbations, a run-level uncertainty/cluster-stability analysis,
+  and replication across a second pinned model family.
+
 ---
 
 ## Open tradeoff to resolve (needs the user)
@@ -162,12 +187,11 @@ Tranche 3:** `aiworld/analysis/behavioral_metrics.py` analyzes the baseline by B
 baseline config can be added next (still gated on the user wanting to spend live-model
 runs on it).
 
-**Resolved:** the paper's central claim is *"Emergent behavioral organization under
-unassigned objectives in LLM agents"* (recorded at the top of this file). This pins
-Tranche 3's primary outcome to **behavioral** organization measured in the de-primed
-(unassigned) baseline — self-report is secondary and never fed back.
+**Resolved:** the primary claim is now intentionally narrower: behavioral organization
+under **no experimenter-specified distal goal** in a specified viability ecology. The
+primary condition is the factual-history/no-self-model arm; the no-history arm is a
+negative control and self-report remains secondary.
 
-**Still pending:** propagate this reframing (behavioral-organization claim; de-primed
-baseline as the primary condition) into the three paper docs — PAPER_OUTLINE,
-RESEARCH_PROPOSAL, RESEARCH_PITCH — which still carry the older "what do agents
-become when nothing is assigned" framing.
+**Current documentation rule:** `EXPERIMENT_PROTOCOL.md` is authoritative. The older
+DESIGN and PAPER_OUTLINE files are retained as historical scaffolds and labeled as
+such until they are rewritten around completed data.

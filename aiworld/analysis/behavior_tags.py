@@ -27,6 +27,9 @@ from typing import Callable
 from .trajectories import load_ticks
 
 
+_PROPOSAL_ONLY_OUTCOME_STATUS = "not_applied_static_sampling_null"
+
+
 BEHAVIOR_ONTOLOGY: dict[str, str] = {
     "self_serving": "acted purely to satisfy own needs; no other agent involved or affected",
     "pro_social": "helped, shared with, or benefited another agent",
@@ -56,6 +59,12 @@ def heuristic_tag_run(run_dir: str) -> list[dict]:
     agents act sequentially within a tick, not simultaneously).
     """
     records = load_ticks(run_dir)
+    if any(record.get("outcome_status") == _PROPOSAL_ONLY_OUTCOME_STATUS
+           for record in records):
+        raise ValueError(
+            f"{run_dir!r} is a proposal-only static sampling null, not realized "
+            "world behavior. It cannot be assigned behavioral or moral tags."
+        )
     by_tick_position: dict[tuple[int, str], list[dict]] = {}
     by_agent_tick: dict[tuple[str, int], dict] = {}
     for r in records:

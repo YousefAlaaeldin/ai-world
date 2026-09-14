@@ -43,7 +43,11 @@ def main():
     args = ap.parse_args()
 
     if args.run:
-        feats = behavioral_features_run(args.run)
+        try:
+            feats = behavioral_features_run(args.run)
+        except ValueError as exc:
+            print(f"Cannot analyze {args.run}: {exc}")
+            return
         if not feats:
             print(f"No ticks found in {args.run}")
             return
@@ -64,7 +68,11 @@ def main():
         print(f"No seed_* run dirs under {args.sweep}")
         return
     print(f"Clustering behavior across {len(dirs)} runs under {args.sweep}")
-    result = cluster_behaviors(dirs)
+    try:
+        result = cluster_behaviors(dirs)
+    except ValueError as exc:
+        print(f"Cannot analyze sweep {args.sweep}: {exc}")
+        return
     print(json.dumps(result, indent=2))
 
 

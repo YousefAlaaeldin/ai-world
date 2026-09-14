@@ -1,0 +1,82 @@
+# PRIMARY UNASSIGNED-HISTORY CONDITION.
+#
+# This is the recommended main condition for the question: can stable behavioral
+# commitments arise when an agent has a persistent record of its own observed
+# history, but receives NO experimenter-specified identity, value hierarchy, or
+# distal objective?  The action context is an objective, bounded event ledger --
+# not a self-description and not a reflection-generated narrative.
+#
+# Pair it with:
+#   - experiment_deprimed_baseline.yaml (negative control: no persistent action
+#     history), and
+#   - experiment_self_narrative_unassigned.yaml (identity/self-conditioning
+#     treatment using the same ecology and factual event source).
+#
+# It is still a behavioral-organization experiment, not evidence of a human-like
+# inner purpose.  Use held-out perturbation/probe conditions before making a
+# stronger claim.
+
+experiment_name: factual_memory_unassigned
+description: >
+  Primary unassigned-history condition: six identical policy instances in a rich
+  ecology, with no directive, no self-model feedback, and a bounded factual event
+  ledger in each action prompt. Tests whether objective experience history alone
+  supports stable behavioral organization.
+
+world:
+  # Matched rich ecology used by the open-world baseline and self-narrative arm.
+  locations: [north, south, east, west, center]
+  edges:
+    - [north, center]
+    - [south, center]
+    - [east, center]
+    - [west, center]
+  resources:
+    - {location: north, drive: hunger, quantity: 30}
+    - {location: south, drive: thirst, quantity: 30}
+    - {location: east,  drive: hunger, quantity: 15}
+    - {location: west,  drive: thirst, quantity: 15}
+  mortality: true
+  vocabulary: neutral
+  # Required by action_memory: factual_ledger. This routes all stored event text
+  # through the plain ledger rendering rather than narrative phrases.
+  memory_style: factual
+  resource_map_mode: counterbalanced
+  randomize_opaque_labels: true
+
+agents:
+  count: 6
+  start_mode: balanced
+  show_self_model: false
+  directive: null
+  # The sole persistent action-context treatment. The runner rejects this mode
+  # unless world.memory_style is factual, and records the fixed context bounds.
+  action_memory: factual_ledger
+  action_memory_max_events: 12
+  action_context_max_chars: 1200
+
+drives:
+  hunger:      {decay_per_tick: 0.05, replenish_amount: 0.6, lethal: true}
+  thirst:      {decay_per_tick: 0.08, replenish_amount: 0.7, lethal: true}
+  affiliation: {decay_per_tick: 0.03, replenish_amount: 0.4, lethal: false}
+
+reflection:
+  every_n_ticks: 5
+  enabled: false              # no self-authoring / no extra identity calls
+  crisis_triggered: false
+  prompt: flat                # unused when enabled: false; explicit provenance
+
+communication:
+  mode: none                  # contact only; no identity or generated dialogue
+
+run:
+  ticks: 40
+  # Independent world runs are the experimental units. Twenty is a minimum
+  # exploratory sweep, not a power calculation or a confirmatory sample size.
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+  model: null
+
+confound_controls:
+  vary_reflection_prompt: false  # reflection is disabled in this condition
+  flat_control: false
+  cross_model: false

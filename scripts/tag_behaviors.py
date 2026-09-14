@@ -38,7 +38,11 @@ def main():
         model_call = lambda p: client.complete(p)  # noqa: E731
         print(f"Filling unclassified tags via '{client.config.model}' ...")
 
-    tagged = tag_run(args.run, model_call=model_call, batch_size=args.batch_size)
+    try:
+        tagged = tag_run(args.run, model_call=model_call, batch_size=args.batch_size)
+    except ValueError as exc:
+        print(f"Cannot tag {args.run}: {exc}")
+        return
     if not tagged:
         print(f"No ticks.jsonl entries in {args.run}.")
         return

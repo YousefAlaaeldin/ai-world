@@ -1,7 +1,8 @@
 # DE-PRIMED OPEN-WORLD BASELINE (docs/REDESIGN_PLAN.md).
 #
 # The load-bearing condition for the paper claim "emergent behavioral organization
-# under unassigned objectives." Same rich world as experiment_minimal.yaml, but the
+# under no experimenter-specified distal goal. Same rich world as
+# experiment_minimal.yaml, but the
 # agent is given NO assigned objective and never sees a self-model:
 #   - directive: null        -> no "survive and find your purpose"
 #   - show_self_model: false -> its own prior self-description can't steer decisions
@@ -51,6 +52,13 @@ agents:
   start_mode: balanced          # no agent-ID/location confound
   show_self_model: false      # de-primed: no self-description fed back
   directive: null             # de-primed: no assigned objective
+  # Negative-control history setting: action decisions receive no persistent
+  # text. Compare this with experiment_factual_memory_unassigned.yaml to test
+  # whether objective history, rather than identity narration, enables a stable
+  # strategy.
+  action_memory: none         # none | factual_ledger
+  action_memory_max_events: 12
+  action_context_max_chars: 1200
 
 drives:
   hunger:      {decay_per_tick: 0.05, replenish_amount: 0.6, lethal: true}

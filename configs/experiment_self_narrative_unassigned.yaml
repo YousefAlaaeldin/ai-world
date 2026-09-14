@@ -1,0 +1,72 @@
+# SELF-NARRATIVE / NO-DIRECTIVE TREATMENT.
+#
+# This is deliberately NOT the primary unassigned-purpose condition.  It asks a
+# narrower causal question: after identical factual experience, does feeding a
+# self-authored identity back into action selection amplify or stabilize behavior?
+# The initial self-model is genuinely blank because directive: null; identity
+# wording enters only through this condition's explicit reflection treatment.
+#
+# Compare with experiment_factual_memory_unassigned.yaml and the no-memory
+# experiment_deprimed_baseline.yaml.  All three use the same rich ecology,
+# counterbalancing, agent count, and bounded dynamic action-context limit; the
+# two history-bearing arms share the same factual world-event source.
+
+experiment_name: self_narrative_unassigned
+description: >
+  Self-narrative treatment with no assigned directive: six identical policy
+  instances receive factual experience, periodically author a blank-starting
+  self-description, and see that self-description in later action prompts. Tests
+  self-conditioning, not unassigned purpose by itself.
+
+world:
+  locations: [north, south, east, west, center]
+  edges:
+    - [north, center]
+    - [south, center]
+    - [east, center]
+    - [west, center]
+  resources:
+    - {location: north, drive: hunger, quantity: 30}
+    - {location: south, drive: thirst, quantity: 30}
+    - {location: east,  drive: hunger, quantity: 15}
+    - {location: west,  drive: thirst, quantity: 15}
+  mortality: true
+  vocabulary: neutral
+  # The reflection receives an objective event source; the identity wording is
+  # isolated to the self-narrative prompt, rather than also living in memories.
+  memory_style: factual
+  resource_map_mode: counterbalanced
+  randomize_opaque_labels: true
+
+agents:
+  count: 6
+  start_mode: balanced
+  show_self_model: true        # explicit treatment: identity fed into actions
+  directive: null              # leaves v0 Who/Matters/Want fields blank
+  action_memory: none          # actions receive self-model, not raw event ledger
+  action_memory_max_events: 12
+  action_context_max_chars: 1200  # same cap as factual-memory comparison arm
+
+drives:
+  hunger:      {decay_per_tick: 0.05, replenish_amount: 0.6, lethal: true}
+  thirst:      {decay_per_tick: 0.08, replenish_amount: 0.7, lethal: true}
+  affiliation: {decay_per_tick: 0.03, replenish_amount: 0.4, lethal: false}
+
+reflection:
+  every_n_ticks: 5
+  enabled: true
+  crisis_triggered: false      # equal scheduled reflection dosage only
+  prompt: flat                 # non-leading of the two identity templates
+
+communication:
+  mode: none
+
+run:
+  ticks: 40
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+  model: null
+
+confound_controls:
+  vary_reflection_prompt: true  # leading prompt is a separate, logged treatment
+  flat_control: true
+  cross_model: false

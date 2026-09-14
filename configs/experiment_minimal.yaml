@@ -58,6 +58,12 @@ agents:
   # and reflection.enabled: false below.
   show_self_model: true
   directive: "Survive and find your purpose."
+  # Explicitly no factual action ledger in the historical primed positive
+  # control. Keeping all context knobs visible prevents a default from making a
+  # later comparison ambiguous.
+  action_memory: none         # none | factual_ledger
+  action_memory_max_events: 12
+  action_context_max_chars: 1200
 
 drives:
   hunger:      {decay_per_tick: 0.05, replenish_amount: 0.6, lethal: true}

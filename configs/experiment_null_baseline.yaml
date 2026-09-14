@@ -1,7 +1,7 @@
-# NULL / BASELINE condition. Pairs with experiment_minimal.yaml as the coarse,
-# omnibus contrast for the core question: does the environment have ANY causal
-# effect on self-authored purpose, or is apparent divergence just sampling noise
-# (DESIGN.md §1, §8)?
+# ECOLOGICAL LOW-PRESSURE COMPARISON.  This is deliberately *not* the planned
+# static/yoked sampling null: it changes the ecology and therefore can only test
+# whether the rich ecology matters relative to a low-pressure one.  The separate
+# sampling null remains a pending control.
 #
 # Deliberately strips out every source of environmental pressure/signal that
 # could differentiate agents:
@@ -12,25 +12,16 @@
 #     guarantees this when locations >= agents) -> no accidental co-location,
 #     so any social contact has to be a deliberate choice, not a default state
 #
-# Same model, same agent count, same seed range as experiment_minimal.yaml --
-# everything held constant except the environment itself. Run both and compare
-# divergence_over_time() / cluster_final_purposes() (aiworld/analysis/
-# trajectories.py) across matched seeds:
-#   - similar divergence in both  -> the "emergence" in experiment_minimal.yaml
-#     is coming from sampling noise or prompt wording, not the environment
-#   - meaningfully LESS divergence here -> the environment in
-#     experiment_minimal.yaml is doing real causal work
-#
-# This is the coarse "does environment matter at all" test, run BEFORE the
-# single-factor contrasts in ROADMAP.md Phase 3 (mortality on/off, scarcity
-# on/off) that isolate WHICH part of the environment matters.
+# It uses the unassigned/no-memory action condition explicitly, so any
+# comparison with the rich open-world baseline is about ecology rather than an
+# accidental reintroduction of purpose or identity priming.
 
 experiment_name: null_baseline
 description: >
   6 identical agents, abundant resources, mortality off, one agent per location
   (fully isolated at start). Environment intentionally carries no
-  differentiating signal -- the control arm for whether environment affects
-  self-authored purpose at all.
+  differentiating pressure. This is an ecological comparison, not a sampling
+  null and not evidence about self-authored purpose.
 
 world:
   locations: [outpost_1, outpost_2, outpost_3, outpost_4, outpost_5, outpost_6]
@@ -69,6 +60,11 @@ agents:
   start_mode: balanced  # with 6 sites this is exactly one agent per site
   # count MUST equal len(world.locations) for true one-per-location isolation
   # (initial_locations() falls back to random-with-replacement otherwise).
+  show_self_model: false
+  directive: null
+  action_memory: none
+  action_memory_max_events: 12
+  action_context_max_chars: 1200
 
 drives:
   hunger:      {decay_per_tick: 0.05, replenish_amount: 0.6, lethal: true}
@@ -77,8 +73,9 @@ drives:
 
 reflection:
   every_n_ticks: 5
+  enabled: false
   crisis_triggered: false  # avoid unequal event-triggered reflection dosage
-  prompt: flat        # match experiment_minimal.yaml's default for a fair contrast
+  prompt: flat        # unused when enabled: false; retained as explicit provenance
 
 communication:
   mode: none

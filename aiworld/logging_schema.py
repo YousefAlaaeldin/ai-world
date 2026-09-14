@@ -46,6 +46,34 @@ class TickRecord:
     proposal_index: int | None = None
     resolution_index: int | None = None
     proposed_action: str | None = None
+    # ``drives`` and ``position`` above are retained as the post-resolution
+    # state for compatibility with the original log schema.  The fields below
+    # preserve the state that actually informed the decision.  Without this
+    # distinction, an analysis can accidentally call a successful consume
+    # "discretionary" because it examines the lower *post-consume* drive.
+    pre_action_drives: dict[str, float] | None = None
+    pre_action_position: str | None = None
+    # JSON-safe, internal drive-name -> count snapshot.  This is deliberately
+    # separate from perceived text: it records the available private stock,
+    # while ``perceived`` remains the exact salience-filtered context shown to
+    # the agent.
+    pre_action_inventory: dict[str, int] | None = None
+    # Structured, pre-resolution opportunity set (resources, co-located
+    # agents, reachable locations, and action-relevant affordances).  It lets
+    # downstream analyses separate a choice from an unavailable opportunity.
+    pre_action_opportunities: dict[str, Any] | None = None
+    # ``None`` means a custom/stub policy did not expose parser diagnostics;
+    # old records therefore remain analyzable.  LLM policies record ``ok`` or
+    # an explicit fallback reason such as ``no_legal_action``.
+    parse_status: str | None = None
+    # Whether the submitted proposal was syntactically/parse-valid before
+    # resolution.  A malformed completion that falls back to ``wait`` is
+    # False, so it cannot be mistaken for an intentional wait.
+    proposal_valid: bool | None = None
+    # ``outcome`` is the human-readable realized outcome.  These structured
+    # fields make success/failure usable without reverse-parsing that prose.
+    outcome_status: str | None = None
+    action_succeeded: bool | None = None
     outcome: str | None = None
     reflection_reason: str | None = None
 

@@ -1,4 +1,15 @@
-# Experimental Design
+# Historical Design Notes — superseded as the execution protocol
+
+> **Protocol notice (2026-09-14):** This file preserves earlier design reasoning,
+> including a shared “survive and find your purpose” directive and self-authored
+> identity as the default. Those are no longer the primary experiment. The
+> authoritative pre-data protocol is [EXPERIMENT_PROTOCOL.md](EXPERIMENT_PROTOCOL.md).
+> Use its unassigned-history condition, condition matrix, measurement rules, and
+> claim boundary for all new runs. Treat descriptions below of directives,
+> self-model trajectories, omnibus “nulls,” or causal traces as historical context
+> unless the canonical protocol explicitly retains them.
+
+# Earlier Experimental Design
 
 ## 1. Premise
 

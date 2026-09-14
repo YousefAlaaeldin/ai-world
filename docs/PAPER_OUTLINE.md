@@ -1,5 +1,11 @@
 # Paper Outline (Scaffold)
 
+> **Protocol notice (2026-09-14):** This is a historical writing scaffold, not the
+> protocol for future runs. It still describes the earlier shared-purpose-directive
+> study in later sections. Use [EXPERIMENT_PROTOCOL.md](EXPERIMENT_PROTOCOL.md) as
+> the source of truth, and revise this outline from actual preregistered conditions
+> and completed data before drafting a paper.
+
 Working outline for a write-up of this project. Section numbers below are for the
 paper itself; cross-references to `DESIGN.md` point at where the underlying reasoning
 already lives so the paper text can be drafted from there rather than re-derived.
@@ -10,8 +16,9 @@ today vs. what still needs to run before that section can be written for real.
 
 ## Title (placeholder)
 
-*"What Do Agents Become When Nothing Is Assigned? Emergent Purpose in Identical,
-Self-Authoring LLM Agents"* — or similar. Working title only.
+*"Behavioral Organization Under Unassigned Distal Goals in a Controlled LLM
+Ecology"* — or similar. Working title only; do not promise “emergent purpose” unless
+the evidence gates in the canonical protocol are met.
 
 ## Abstract
 - One sentence: the inversion (identity as output, not input).

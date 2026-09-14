@@ -30,6 +30,8 @@ from aiworld.logging_schema import RunLogger, CompletionRecord  # noqa: E402
 from aiworld.sim.world import World, Agent, agent_recent_memories  # noqa: E402
 from aiworld.llm_client import LLMClient, config_from_env  # noqa: E402
 from aiworld.components.llm_policy import (  # noqa: E402
+    ACTION_MEMORY_FACTUAL_LEDGER, ACTION_MEMORY_MODES,
+    DEFAULT_ACTION_CONTEXT_MAX_CHARS, DEFAULT_ACTION_MEMORY_MAX_EVENTS,
     make_llm_policy, _action_system_prompt)
 from aiworld.components.self_model_component import (  # noqa: E402
     make_reflect_fn, FLAT_REVISION_PROMPT, LEADING_REVISION_PROMPT)
@@ -38,27 +40,42 @@ from aiworld.config import (  # noqa: E402
     resource_map_from_config)
 
 
+def _derived_seed(run_seed: int, stream: str) -> int:
+    """Make independent, reproducible RNG streams from a declared run seed."""
+    payload = f"aiworld:{run_seed}:{stream}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
+
+
 def build_world(cfg, run_id, n_agents, seed, mortality, vocabulary="neutral",
-                memory_style="narrative"):
+                memory_style="narrative", initial_directive=SHARED_DIRECTIVE):
     """Construct a world plus the non-secret provenance known at setup time."""
-    rng = random.Random(seed)
+    # Keep map/start allocation independent of action conflict resolution.  A
+    # later change in one setup draw must not silently alter the random-priority
+    # sequence that resolves otherwise-identical action proposals.
+    map_seed = _derived_seed(seed, "resource_map")
+    start_seed = _derived_seed(seed, "initial_locations")
+    world_seed = _derived_seed(seed, "presentation_and_resolution")
+    map_rng = random.Random(map_seed)
+    start_rng = random.Random(start_seed)
+    world_rng = random.Random(world_seed)
     locations = cfg["world"]["locations"]
     specs = drive_specs_from_config(cfg)
     adjacency = adjacency_from_config(cfg)
     map_mode = cfg["world"].get("resource_map_mode", "fixed")
     resources, resource_map = resource_map_from_config(
-        cfg, rng=rng, map_mode=map_mode)
+        cfg, rng=map_rng, map_mode=map_mode)
     start_mode = cfg.get("agents", {}).get("start_mode", "legacy")
-    start_locations = initial_locations(rng, locations, n_agents, mode=start_mode)
+    start_locations = initial_locations(start_rng, locations, n_agents, mode=start_mode)
     agents = [
         Agent(agent_id=f"agent_{i}", location=start_locations[i],
               drives=DriveSystem(specs=specs, vocabulary=vocabulary),
-              history=SelfModelHistory(f"agent_{i}"))
+              history=SelfModelHistory(
+                  f"agent_{i}", initial_directive=initial_directive))
         for i in range(n_agents)
     ]
     logger = RunLogger(run_id)
     world = World(
-        locations, resources, agents, logger, rng=rng, mortality=mortality,
+        locations, resources, agents, logger, rng=world_rng, mortality=mortality,
         adjacency=adjacency, vocabulary=vocabulary, memory_style=memory_style,
         communication_mode=cfg.get("communication", {}).get("mode", "none"),
         crisis_reflection_enabled=cfg.get("reflection", {}).get(
@@ -75,6 +92,11 @@ def build_world(cfg, run_id, n_agents, seed, mortality, vocabulary="neutral",
         "resource_map_mode": map_mode,
         "presentation": world.presentation_metadata(),
         "action_resolution": "simultaneous_proposals_random_priority",
+        "randomization_seeds": {
+            "resource_map": map_seed,
+            "initial_locations": start_seed,
+            "presentation_and_resolution": world_seed,
+        },
     }
     return world, setup
 
@@ -129,7 +151,31 @@ def main():
     agents_cfg = exp_cfg.get("agents", {})
     show_self_model = agents_cfg.get("show_self_model", True)
     directive = agents_cfg.get("directive", SHARED_DIRECTIVE)  # YAML null -> de-primed
+    action_memory = agents_cfg.get("action_memory", "none")
+    action_memory_max_events = agents_cfg.get(
+        "action_memory_max_events", DEFAULT_ACTION_MEMORY_MAX_EVENTS)
+    action_context_max_chars = agents_cfg.get(
+        "action_context_max_chars", DEFAULT_ACTION_CONTEXT_MAX_CHARS)
     reflection_enabled = exp_cfg["reflection"].get("enabled", True)
+
+    if action_memory not in ACTION_MEMORY_MODES:
+        choices = ", ".join(sorted(ACTION_MEMORY_MODES))
+        raise ValueError(
+            f"Unknown agents.action_memory {action_memory!r}; expected one of: {choices}."
+        )
+    if not isinstance(action_memory_max_events, int) or action_memory_max_events < 1:
+        raise ValueError("agents.action_memory_max_events must be an integer >= 1.")
+    if not isinstance(action_context_max_chars, int) or action_context_max_chars < 96:
+        raise ValueError("agents.action_context_max_chars must be an integer >= 96.")
+    # A factual ledger is an experimental history channel, not merely a label.
+    # Reject the narratively phrased world-memory source so the condition cannot
+    # silently acquire "nearly died"/identity-like framing.
+    if (action_memory == ACTION_MEMORY_FACTUAL_LEDGER
+            and memory_style != "factual"):
+        raise ValueError(
+            "agents.action_memory: factual_ledger requires "
+            "world.memory_style: factual."
+        )
 
     cfg = config_from_env()
     sampling_seed = (args.sampling_seed if args.sampling_seed is not None
@@ -142,7 +188,16 @@ def main():
     # Persist the actual experimental condition, including one-off CLI overrides,
     # rather than a config file that only approximately describes the run.
     resolved_cfg = copy.deepcopy(exp_cfg)
-    resolved_cfg.setdefault("agents", {})["count"] = n_agents
+    resolved_agents = resolved_cfg.setdefault("agents", {})
+    resolved_agents["count"] = n_agents
+    # Persist every condition knob even when an older config relied on a legacy
+    # default.  A rerun therefore cannot be mistaken for an unprimed arm simply
+    # because its source YAML omitted a field.
+    resolved_agents["show_self_model"] = show_self_model
+    resolved_agents["directive"] = directive
+    resolved_agents["action_memory"] = action_memory
+    resolved_agents["action_memory_max_events"] = action_memory_max_events
+    resolved_agents["action_context_max_chars"] = action_context_max_chars
     resolved_cfg.setdefault("world", {})["mortality"] = mortality
     resolved_cfg["world"]["vocabulary"] = vocabulary
     resolved_cfg["world"]["memory_style"] = memory_style
@@ -159,10 +214,17 @@ def main():
                            else LEADING_REVISION_PROMPT)
     world, setup = build_world(resolved_cfg, args.run_id, n_agents, args.seed,
                                mortality=mortality, vocabulary=vocabulary,
-                               memory_style=memory_style)
+                               memory_style=memory_style,
+                               initial_directive=directive)
     condition = {
         "show_self_model": show_self_model,
         "directive": directive,
+        "initial_self_model_is_blank": directive is None or directive == "",
+        "action_memory": action_memory,
+        "action_memory_max_events": action_memory_max_events,
+        "action_context_max_chars": action_context_max_chars,
+        "world_memory_style": memory_style,
+        "vocabulary": vocabulary,
         "reflection_enabled": reflection_enabled,
         "reflection_prompt": prompt_choice if reflection_enabled else None,
         "communication_mode": world.communication_mode,
@@ -186,7 +248,10 @@ def main():
         **setup,
     })
     policy = make_llm_policy(client, vocabulary=vocabulary, directive=directive,
-                             show_self_model=show_self_model)
+                             show_self_model=show_self_model,
+                             action_memory=action_memory,
+                             action_memory_max_events=action_memory_max_events,
+                             action_context_max_chars=action_context_max_chars)
 
     reflect = None
     if reflection_enabled:

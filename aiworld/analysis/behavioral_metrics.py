@@ -1,15 +1,20 @@
-"""Behavioral metrics: measure what agents DO, not what they say.
+"""Behavioral metrics: measure what agents do, not what they say.
 
-Tranche 3 (docs/REDESIGN_PLAN.md). The paper's claim -- "emergent behavioral
-organization under unassigned objectives in LLM agents" -- makes BEHAVIOR the
-primary outcome. That's what lets the de-primed baseline (no self-model fed back,
-no directive) be analyzed at all: it produces no self-model trajectory, but it
-still produces a stream of actions.
+The canonical protocol treats behavioral organization under no
+experimenter-specified distal goal as the primary outcome. That's what lets the
+de-primed baseline (no self-model fed back, no directive) be analyzed at all: it
+produces no self-model trajectory, but it still produces a stream of actions.
 
 Everything reads ticks.jsonl directly -- no LLM, no network. Features are a FIXED
 numeric schema (FEATURE_NAMES), i.e. a stable representation trained/defined once,
 NOT a per-tick TF-IDF refit -- so vectors are comparable within a run, across
 runs, and across conditions (the property the review flagged as missing).
+
+Decision and realization are deliberately separate.  A malformed model completion
+that fell back to ``wait`` is a data-quality event, not a chosen wait; a legal
+``consume`` that found nothing is an attempted behavior, not a successful consume.
+New T5+ records carry explicit fields for both.  Older logs remain readable with
+documented conservative fallbacks.
 
 The features cover action mix, exploration, and sociality, plus the signals most
 relevant to "emergent purpose":
@@ -21,12 +26,16 @@ relevant to "emergent purpose":
     another), build (public good), take (steal), attack (harm/kill). These are
     what let the MACHIAVELLI-style ontology be grounded in real mechanics.
 
-LAYOUT NOTE: FEATURE_NAMES grew with Tranche 4, so a feature vector from a pre-T4
-run has fewer columns. Don't cluster across that boundary -- feature_matrix would
-produce ragged rows. Analyze runs from one action-space generation together.
+LAYOUT NOTE: FEATURE_NAMES changed again with the decision/outcome validity
+revision: it removes the duplicate ``talk_rate`` column and adds proposal/success
+quality columns. Do not cluster feature vectors across schema generations; analyze
+runs from one action-space and measurement-schema generation together.
 """
 
 from __future__ import annotations
+
+import json
+import os
 
 import numpy as np
 
@@ -35,13 +44,18 @@ from .trajectories import load_ticks
 
 NEED_THRESHOLD = 0.5           # a lethal drive >= this = "under viability pressure"
 LETHAL_DRIVE_KEYS = ("hunger", "thirst")   # internal log keys (unchanged by vocabulary)
+# ``scripts/run_sampling_null.py`` uses this explicit realization marker.  Keep
+# the analysis-side string local to avoid making the analysis package import a
+# runner script (and its CLI dependencies) just to protect an invalid comparison.
+_PROPOSAL_ONLY_OUTCOME_STATUS = "not_applied_static_sampling_null"
 
 # The fixed behavioral fingerprint. Order matters -- it defines the vector layout.
 FEATURE_NAMES = [
     "frac_consume", "frac_move", "frac_talk", "frac_wait",
     "exploration_coverage", "move_rate",
-    "talk_rate", "social_partners_frac",
+    "successful_talk_rate", "social_partners_frac",
     "discretionary_activity", "over_acquisition", "survival_frac",
+    "valid_proposal_frac", "parse_failure_frac", "successful_nonwait_frac",
     # Tranche 4 good/bad action spectrum:
     "gather_rate", "transfer_rate", "build_rate", "take_rate", "attack_rate",
 ]
@@ -51,8 +65,13 @@ _MIX_KINDS = ("consume", "move", "talk", "wait",
               "gather", "transfer", "build", "take", "attack")
 
 
+def _decision_drives(rec: dict) -> dict:
+    """Drives available at choice time, falling back for pre-schema records."""
+    return rec.get("pre_action_drives") or rec.get("drives", {})
+
+
 def _under_pressure(rec: dict) -> bool:
-    drives = rec.get("drives", {})
+    drives = _decision_drives(rec)
     return any(float(drives.get(k, 0.0)) >= NEED_THRESHOLD for k in LETHAL_DRIVE_KEYS)
 
 
@@ -65,70 +84,264 @@ def _action_kind(action: str) -> str:
     return "wait"   # 'wait' and any no-op/failed action string
 
 
+def _decision_action(rec: dict) -> str:
+    """Canonical submitted action, with the historical field as a fallback."""
+    return str(rec.get("proposed_action") or rec.get("chosen_action") or "wait")
+
+
+def _action_has_supported_syntax(action: str) -> bool:
+    if action in {"consume", "gather", "build", "wait", "reflect"}:
+        return True
+    prefixes = ("move:", "talk:", "transfer:", "take:", "attack:")
+    return any(action.startswith(prefix) and len(action) > len(prefix)
+               for prefix in prefixes)
+
+
+def _is_parse_failure(rec: dict) -> bool:
+    """True only for an explicitly recorded parser/policy fallback.
+
+    Missing status means either an old record or a custom policy, neither of
+    which should be retroactively labeled a parser failure.
+    """
+    status = rec.get("parse_status")
+    return status not in (None, "", "ok", "not_applicable", "not_recorded")
+
+
+def _has_valid_proposal(rec: dict) -> bool:
+    """Whether this record represents an intentional, grammar-valid proposal."""
+    explicit = rec.get("proposal_valid")
+    if explicit is not None:
+        return bool(explicit)
+    # Historical records did not retain parser diagnostics.  They remain
+    # decision records unless they now explicitly say otherwise, but an
+    # arbitrary string is never silently reclassified as a chosen wait.
+    return not _is_parse_failure(rec) and _action_has_supported_syntax(_decision_action(rec))
+
+
+def _action_succeeded(rec: dict) -> bool:
+    """Whether the submitted action had its intended mechanical realization.
+
+    New logs have an explicit Boolean.  For old logs, a missing outcome means
+    success is genuinely unknowable, so preserve the former action-choice
+    behavior rather than invent a failure.  If an old outcome string is present,
+    recognize only the stable successful prefixes used by the world.
+    """
+    explicit = rec.get("action_succeeded")
+    if explicit is not None:
+        return bool(explicit)
+    if not _has_valid_proposal(rec):
+        return False
+    action = _decision_action(rec)
+    if action in {"wait", "reflect"}:
+        return True
+    outcome = rec.get("outcome")
+    if outcome is None:
+        return True
+    kind = _action_kind(action)
+    success_prefixes = {
+        "consume": ("consumed ",),
+        "gather": ("gathered ",),
+        "build": ("contributed ",),
+        "move": ("moved ",),
+        "talk": ("made contact ", "exchanged messages ", "talked "),
+        "transfer": ("transferred ",),
+        "take": ("took ",),
+        "attack": ("attacked ",),
+    }
+    return str(outcome).startswith(success_prefixes.get(kind, ()))
+
+
 def agent_features(records: list[dict], total_ticks: int, n_agents: int,
-                   all_locations: set[str]) -> dict[str, float]:
-    """Fixed-schema behavioral feature vector for ONE agent from its tick records."""
+                    all_locations: set[str]) -> dict[str, float]:
+    """Fixed-schema behavioral feature vector for one agent.
+
+    Action-mix features describe *valid proposals* (what the agent selected),
+    while the ``successful_*`` features describe realized mechanical effects.
+    This keeps parser fallbacks and unavailable-action attempts from becoming a
+    fake behavioral tendency.  ``total_ticks`` must be the scheduled horizon
+    when known, not merely the last observed tick.
+    """
     recs = sorted(records, key=lambda r: r["tick"])
     n = len(recs)
     if n == 0:
         return {k: 0.0 for k in FEATURE_NAMES}
 
-    kinds = [_action_kind(r["chosen_action"]) for r in recs]
-    def frac(kind: str) -> float:
-        return sum(1 for k in kinds if k == kind) / n
+    valid_recs = [r for r in recs if _has_valid_proposal(r)]
+    valid_kinds = [_action_kind(_decision_action(r)) for r in valid_recs]
+    n_valid = len(valid_recs)
 
+    def frac(kind: str) -> float:
+        return sum(1 for k in valid_kinds if k == kind) / n_valid if n_valid else 0.0
+
+    # A first-tick move visits both its source and destination.  New records
+    # retain that source explicitly; older records can only contribute their
+    # historical post-action position.
     positions = [r["position"] for r in recs]
     visited = set(positions)
+    visited.update(r["pre_action_position"] for r in recs
+                   if r.get("pre_action_position") is not None)
     coverage = len(visited) / len(all_locations) if all_locations else 0.0
-    if n > 1:
-        move_rate = sum(1 for i in range(1, n) if positions[i] != positions[i - 1]) / (n - 1)
+    if any(r.get("pre_action_position") is not None for r in recs):
+        # New logs can distinguish attempted from realized movement directly,
+        # including a move on the first observed tick.
+        move_rate = (sum(1 for r in valid_recs
+                         if _action_kind(_decision_action(r)) == "move"
+                         and _action_succeeded(r)
+                         and r.get("pre_action_position") != r.get("position"))
+                     / n_valid if n_valid else 0.0)
+    elif n > 1:
+        # Compatibility fallback for old logs, which had no pre-action location.
+        move_rate = sum(1 for i in range(1, n)
+                        if positions[i] != positions[i - 1]) / (n - 1)
     else:
         move_rate = 0.0
 
-    partners = {r["chosen_action"].split(":", 1)[1]
-                for r in recs if r["chosen_action"].startswith("talk:")}
+    successful_talks = [
+        r for r in valid_recs
+        if _action_kind(_decision_action(r)) == "talk" and _action_succeeded(r)
+    ]
+    partners = {_decision_action(r).split(":", 1)[1]
+                for r in successful_talks
+                if ":" in _decision_action(r)}
     social_partners_frac = len(partners) / (n_agents - 1) if n_agents > 1 else 0.0
 
-    not_pressure = [r for r, k in zip(recs, kinds) if not _under_pressure(r)]
+    not_pressure = [r for r in valid_recs if not _under_pressure(r)]
     if not_pressure:
-        discretionary = sum(1 for r in not_pressure
-                            if _action_kind(r["chosen_action"]) != "wait") / len(not_pressure)
+        # A purpose-like activity needs to be both selected and realized while
+        # the agent had viability slack.  Failed attempts are reported through
+        # success features rather than inflated into discretionary behavior.
+        discretionary = sum(
+            1 for r in not_pressure
+            if _action_kind(_decision_action(r)) != "wait" and _action_succeeded(r)
+        ) / len(not_pressure)
     else:
         discretionary = 0.0
 
-    consume_recs = [r for r, k in zip(recs, kinds) if k == "consume"]
+    consume_recs = [
+        r for r in valid_recs
+        if _action_kind(_decision_action(r)) == "consume" and _action_succeeded(r)
+    ]
     if consume_recs:
         over_acq = sum(1 for r in consume_recs if not _under_pressure(r)) / len(consume_recs)
     else:
         over_acq = 0.0
 
-    survival_frac = (max(r["tick"] for r in recs) / total_ticks) if total_ticks else 0.0
+    survival_frac = (min(1.0, max(r["tick"] for r in recs) / total_ticks)
+                     if total_ticks else 0.0)
+    successful_nonwait = sum(
+        1 for r in valid_recs
+        if _action_kind(_decision_action(r)) != "wait" and _action_succeeded(r)
+    )
 
     return {
         "frac_consume": frac("consume"), "frac_move": frac("move"),
         "frac_talk": frac("talk"), "frac_wait": frac("wait"),
         "exploration_coverage": coverage, "move_rate": move_rate,
-        "talk_rate": frac("talk"), "social_partners_frac": social_partners_frac,
+        "successful_talk_rate": len(successful_talks) / n if n else 0.0,
+        "social_partners_frac": social_partners_frac,
         "discretionary_activity": discretionary, "over_acquisition": over_acq,
         "survival_frac": survival_frac,
+        "valid_proposal_frac": n_valid / n,
+        "parse_failure_frac": sum(1 for r in recs if _is_parse_failure(r)) / n,
+        "successful_nonwait_frac": successful_nonwait / n if n else 0.0,
         "gather_rate": frac("gather"), "transfer_rate": frac("transfer"),
         "build_rate": frac("build"), "take_rate": frac("take"),
         "attack_rate": frac("attack"),
     }
 
 
+def _load_metadata(run_dir: str) -> dict:
+    """Read immutable run metadata when present; old hand-built logs may lack it."""
+    path = os.path.join(run_dir, "meta.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        # Analysis should remain usable for a partially copied legacy run.  The
+        # conservative observable-data fallback below is preferable to a crash.
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _configured_horizon(meta: dict, fallback: int) -> int:
+    """Resolve the planned tick horizon from standardized or legacy metadata."""
+    resolved = meta.get("resolved_config")
+    candidates = [
+        meta.get("scheduled_ticks"),
+        meta.get("ticks"),
+        resolved.get("run", {}).get("ticks") if isinstance(resolved, dict) else None,
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, (int, float)) and candidate > 0:
+            return int(candidate)
+    return fallback
+
+
+def _configured_locations(meta: dict, fallback: set[str]) -> set[str]:
+    """Use the full configured map, not just locations reached in a short run."""
+    resolved = meta.get("resolved_config")
+    candidates = [
+        meta.get("locations"),
+        resolved.get("world", {}).get("locations") if isinstance(resolved, dict) else None,
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, list) and candidate:
+            return {str(location) for location in candidate}
+    return fallback
+
+
+def _require_realized_behavior(meta: dict, ticks: list[dict], run_dir: str) -> None:
+    """Reject a static proposal-only null from realized-behavior analyses.
+
+    The sampling null is valuable for estimating model/decoder variation, but
+    its actions never altered the world.  Treating its ticks as behavioral
+    observations would manufacture survival/exploration/action profiles and
+    contaminate world-run comparisons.  Check both metadata and per-tick status
+    so the safeguard still works if a run was interrupted before meta.json was
+    written.
+    """
+    is_static_policy = meta.get("policy") == "static_sampling_null"
+    has_static_ticks = any(
+        record.get("outcome_status") == _PROPOSAL_ONLY_OUTCOME_STATUS
+        for record in ticks
+    )
+    if is_static_policy or has_static_ticks:
+        raise ValueError(
+            f"{run_dir!r} is a proposal-only static sampling null, not realized "
+            "world behavior. Do not pass it to behavioral feature, divergence, "
+            "or clustering analysis."
+        )
+
+
 def behavioral_features_run(run_dir: str) -> dict[str, dict[str, float]]:
-    """Per-agent behavioral feature vectors for one run. {agent_id: {feature: value}}."""
+    """Per-agent behavioral feature vectors for one run.
+
+    When ``meta.json`` carries the resolved config (as standard runs do), use
+    its scheduled horizon and full world map.  This prevents extinction-shortened
+    runs from looking like complete survival or complete exploration.
+    """
     ticks = load_ticks(run_dir)
     if not ticks:
         return {}
-    total_ticks = max(r["tick"] for r in ticks)
-    all_locations = {r["position"] for r in ticks}
+    meta = _load_metadata(run_dir)
+    _require_realized_behavior(meta, ticks, run_dir)
+    observed_ticks = max(r["tick"] for r in ticks)
+    total_ticks = _configured_horizon(meta, observed_ticks)
+    observed_locations = {r["position"] for r in ticks}
+    observed_locations.update(r["pre_action_position"] for r in ticks
+                              if r.get("pre_action_position") is not None)
+    all_locations = _configured_locations(meta, observed_locations)
     agent_ids = sorted({r["agent_id"] for r in ticks})
+    configured_n_agents = meta.get("n_agents")
+    n_agents = (int(configured_n_agents)
+                if isinstance(configured_n_agents, (int, float)) and configured_n_agents > 0
+                else len(agent_ids))
     by_agent: dict[str, list[dict]] = {aid: [] for aid in agent_ids}
     for r in ticks:
         by_agent[r["agent_id"]].append(r)
-    return {aid: agent_features(recs, total_ticks, len(agent_ids), all_locations)
+    return {aid: agent_features(recs, total_ticks, n_agents, all_locations)
             for aid, recs in by_agent.items()}
 
 
@@ -155,13 +368,15 @@ def behavioral_divergence_over_time(run_dir: str, window: int = 5) -> dict[int, 
     trajectories.divergence_over_time, which measured self-model text.)
 
     Splits the run into `window`-tick blocks; in each block, builds every alive
-    agent's action-mix vector (consume/move/talk/wait fractions within the block),
-    standardizes across agents, and returns {block_end_tick: mean pairwise distance}.
-    Rising = behavioral differentiation.
+    agent's valid-proposal action-mix vector (consume/move/talk/wait fractions
+    within the block), standardizes across agents, and returns
+    {block_end_tick: mean pairwise distance}. Parser fallbacks are omitted rather
+    than treated as intentional waits. Rising = behavioral differentiation.
     """
     ticks = load_ticks(run_dir)
     if not ticks:
         return {}
+    _require_realized_behavior(_load_metadata(run_dir), ticks, run_dir)
     total = max(r["tick"] for r in ticks)
     out: dict[int, float] = {}
     for end in range(window, total + 1, window):
@@ -169,7 +384,9 @@ def behavioral_divergence_over_time(run_dir: str, window: int = 5) -> dict[int, 
         block = [r for r in ticks if start < r["tick"] <= end]
         by_agent: dict[str, list[str]] = {}
         for r in block:
-            by_agent.setdefault(r["agent_id"], []).append(_action_kind(r["chosen_action"]))
+            if _has_valid_proposal(r):
+                by_agent.setdefault(r["agent_id"], []).append(
+                    _action_kind(_decision_action(r)))
         vecs = []
         for kinds in by_agent.values():
             n = len(kinds)

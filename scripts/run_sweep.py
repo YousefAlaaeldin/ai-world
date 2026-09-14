@@ -21,6 +21,11 @@ Usage:
     # directly comparable to the run above:
     python scripts/run_sweep.py --config configs/experiment_null_baseline.yaml --policy llm
 
+    # Static-context sampling control: repeatedly draw actions from one frozen
+    # initial prompt per seed, never applying them to the world.  This estimates
+    # decoder/model variation and is proposal-only data, not a second world arm.
+    python scripts/run_sweep.py --config configs/experiment_factual_memory_unassigned.yaml --policy sampling-null
+
     # See the commands without running anything:
     python scripts/run_sweep.py --config configs/experiment_minimal.yaml --dry-run
 """
@@ -70,7 +75,9 @@ def condition_slug(cfg: dict, policy: str, prompt: str | None) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/experiment_minimal.yaml")
-    ap.add_argument("--policy", choices=["stub", "llm"], default="stub")
+    ap.add_argument("--policy", choices=["stub", "llm", "sampling-null"], default="stub",
+                    help="stub = mechanics only; llm = realized world behavior; "
+                         "sampling-null = frozen-context proposal-only control")
     ap.add_argument("--seeds", type=int, nargs="+", default=None,
                     help="override config run.seeds, e.g. --seeds 0 1 2")
     ap.add_argument("--prompt", choices=["flat", "leading"], default=None,
@@ -83,7 +90,11 @@ def main():
     seeds = args.seeds if args.seeds is not None else cfg["run"]["seeds"]
     experiment_name = cfg.get(
         "experiment_name", os.path.splitext(os.path.basename(args.config))[0])
-    script = "run_stub.py" if args.policy == "stub" else "run_llm.py"
+    script = {
+        "stub": "run_stub.py",
+        "llm": "run_llm.py",
+        "sampling-null": "run_sampling_null.py",
+    }[args.policy]
     condition = condition_slug(cfg, args.policy, args.prompt or cfg.get(
         "reflection", {}).get("prompt"))
 

@@ -68,6 +68,11 @@ class Agent:
     last_action_system_prompt: str | None = None
     last_raw_completion: str | None = None
     last_parse_status: str | None = None
+    # Resolution audit fields are set by World.resolve_action() (or by the
+    # simultaneous movement phase).  They are intentionally separate from the
+    # prose outcome so analysis never has to infer success by matching text.
+    last_outcome_status: str | None = None
+    last_action_succeeded: bool | None = None
 
 
 LONG_TERM_MEMORY_CAP = 20  # oldest entry evicted past this; keeps prompts bounded
@@ -311,6 +316,149 @@ class World:
                     queue.append((neighbor, first_step or neighbor))
         return None
 
+    # ---- decision-state audit helpers ----
+
+    @staticmethod
+    def _inventory_snapshot(agent: Agent) -> dict[str, int]:
+        """Return a JSON-safe copy of an agent's private store.
+
+        ``DriveKind`` is a string enum today, but converting explicitly keeps
+        the log schema stable if the representation changes later.  Zero-count
+        entries are omitted because they are not available opportunities.
+        """
+        return {
+            (kind.value if isinstance(kind, DriveKind) else str(kind)): int(count)
+            for kind, count in agent.inventory.items()
+            if count > 0
+        }
+
+    def _pre_action_opportunities(self, agent: Agent) -> dict:
+        """Capture the structural opportunity set before any proposal resolves.
+
+        This is not a second model-facing prompt.  ``perceived`` already logs
+        the exact salience-filtered text shown to the agent.  This record makes
+        unavailable actions, contested resources, and realised outcomes
+        distinguishable in later analysis.
+        """
+        resources_here = [
+            {"drive": resource.drive.value, "quantity": int(resource.quantity)}
+            for resource in self.resources
+            if resource.location == agent.location and resource.quantity > 0
+        ]
+        public_here = {
+            (kind.value if isinstance(kind, DriveKind) else str(kind)): int(count)
+            for kind, count in self.public_stock.get(agent.location, {}).items()
+            if count > 0
+        }
+        inventory = self._inventory_snapshot(agent)
+        co_located = sorted(
+            other.agent_id for other in self.agents
+            if other.agent_id != agent.agent_id
+            and other.location == agent.location
+            and other.drives.alive
+        )
+        takeable = sorted(
+            other.agent_id for other in self.agents
+            if other.agent_id != agent.agent_id
+            and other.location == agent.location
+            and other.drives.alive
+            and any(count > 0 for count in other.inventory.values())
+        )
+        gatherable = [
+            resource for resource in resources_here
+            if inventory.get(resource["drive"], 0) < INVENTORY_CAP
+        ]
+        consume_sources = []
+        # Preserve the individual sources rather than only a Boolean: consuming
+        # a contested node and consuming a private store are substantively
+        # different opportunities.
+        available_kinds = set()
+        for resource in resources_here:
+            available_kinds.add(resource["drive"])
+            consume_sources.append({"drive": resource["drive"], "source": "node"})
+        for drive, count in inventory.items():
+            if count > 0:
+                available_kinds.add(drive)
+                consume_sources.append({"drive": drive, "source": "inventory"})
+        for drive, count in public_here.items():
+            if count > 0:
+                available_kinds.add(drive)
+                consume_sources.append({"drive": drive, "source": "public"})
+        # A drive can have more than one source.  Deduplicate only exact pairs
+        # so the log stays compact but retains source-level opportunity.
+        unique_sources = []
+        seen_sources = set()
+        for item in consume_sources:
+            key = (item["drive"], item["source"])
+            if key not in seen_sources:
+                seen_sources.add(key)
+                unique_sources.append(item)
+
+        return {
+            "resources_here": resources_here,
+            "public_stock_here": public_here,
+            "reachable_locations": sorted(
+                self.adjacency.get(agent.location, ()), key=self.location_label),
+            "co_located_agents": co_located,
+            "consume_sources": unique_sources,
+            "gatherable_resources": gatherable,
+            "transfer_targets": co_located if inventory else [],
+            "take_targets": takeable,
+            "attack_targets": co_located,
+            "talk_targets": co_located,
+            "can_build": bool(inventory),
+            "can_consume": bool(available_kinds),
+            "can_gather": bool(gatherable),
+            "can_transfer": bool(inventory and co_located),
+            "can_take": bool(takeable),
+            "can_attack": bool(co_located),
+            "can_talk": bool(co_located),
+        }
+
+    @staticmethod
+    def _is_valid_action_syntax(action: str) -> bool:
+        """Whether a policy submitted a supported action grammar.
+
+        Parser-backed LLM policies add a stronger target/reachability check
+        before this point.  The syntax check covers custom/stub policies too,
+        so arbitrary strings cannot silently become intentional waits in logs.
+        """
+        if action in {"consume", "gather", "build", "wait", "reflect"}:
+            return True
+        prefixes = ("move:", "talk:", "transfer:", "take:", "attack:")
+        return any(action.startswith(prefix) and len(action) > len(prefix)
+                   for prefix in prefixes)
+
+    @classmethod
+    def _proposal_is_valid(cls, action: str, parse_status: str | None) -> bool:
+        # ``None`` is the legacy/custom-policy case, not a parse failure.  Any
+        # non-ok parser diagnostic is an explicit fallback/data-quality event.
+        parse_ok = parse_status in (None, "", "ok", "not_applicable")
+        return parse_ok and cls._is_valid_action_syntax(action)
+
+    @staticmethod
+    def _classify_outcome(action: str, outcome: str) -> tuple[str, bool]:
+        """Classify a realized action outcome without exposing prose to analysis."""
+        if outcome.startswith("proposal not resolved"):
+            return "not_resolved", False
+        if action in {"wait", "reflect"}:
+            # A chosen wait is a valid no-op, not a successful non-wait action.
+            return "no_effect", True
+        success_prefixes = {
+            "consume": ("consumed ",),
+            "gather": ("gathered ",),
+            "build": ("contributed ",),
+            "move": ("moved ",),
+            "talk": ("made contact ", "exchanged messages ", "talked "),
+            "transfer": ("transferred ",),
+            "take": ("took ",),
+            "attack": ("attacked ",),
+        }
+        kind = action.split(":", 1)[0]
+        if outcome.startswith(success_prefixes.get(kind, ())):
+            return "success", True
+        return "failed", False
+
     # ---- action resolution (proto Game Master) ----
 
     def _here_target(self, agent: Agent, target_id: str) -> "Agent | None":
@@ -335,6 +483,19 @@ class World:
                 f"{self.location_label(location)} ran out while you were there")
 
     def resolve_action(self, agent: Agent, action: str) -> str:
+        """Apply an action and attach structured realization metadata to ``agent``.
+
+        The public API continues to return the historical short outcome string.
+        The attached status is consumed only by the tick logger, preserving
+        compatibility for mechanics tests and external policy callers.
+        """
+        outcome = self._resolve_action(agent, action)
+        status, succeeded = self._classify_outcome(action, outcome)
+        agent.last_outcome_status = status
+        agent.last_action_succeeded = succeeded
+        return outcome
+
+    def _resolve_action(self, agent: Agent, action: str) -> str:
         """Apply an action to world state, return a short outcome description.
 
         Model-facing outcome/memory strings route resource words through
@@ -619,11 +780,22 @@ class World:
             # agent's action, even though LLM calls themselves are made serially.
             perceived_by_id: dict[str, str] = {}
             crisis_before: dict[str, bool] = {}
+            decision_state_by_id: dict[str, dict] = {}
             for agent in live_at_start:
                 perceived_obs = self.observations_for(agent)
                 perceived_by_id[agent.agent_id] = render_perceived(
                     perceived_obs, agent.drives.salience_biases(), top_k=6)
                 crisis_before[agent.agent_id] = agent.drives.in_crisis()
+                # Snapshot before *any* policy is called.  The policy sees the
+                # perceived text below; analysis also needs the underlying
+                # opportunity set and pre-action state to avoid reconstructing
+                # it from a later, already-mutated world.
+                decision_state_by_id[agent.agent_id] = {
+                    "drives": agent.drives.snapshot(),
+                    "position": agent.location,
+                    "inventory": self._inventory_snapshot(agent),
+                    "opportunities": self._pre_action_opportunities(agent),
+                }
 
             proposal_order = self.rng.sample(live_at_start, len(live_at_start))
             proposals: list[dict] = []
@@ -634,18 +806,30 @@ class World:
                 agent.last_action_system_prompt = None
                 agent.last_raw_completion = None
                 agent.last_parse_status = None
+                agent.last_outcome_status = None
+                agent.last_action_succeeded = None
                 action = policy(agent, perceived_by_id[agent.agent_id], self)
                 if not isinstance(action, str):
+                    # Keep a malformed custom policy output from becoming an
+                    # apparently intentional wait in analysis.
+                    if agent.last_parse_status is None:
+                        agent.last_parse_status = "non_string_policy_output"
                     action = "wait"
                 proposals.append({
                     "agent": agent,
                     "action": action,
                     "perceived": perceived_by_id[agent.agent_id],
+                    "decision_state": decision_state_by_id[agent.agent_id],
+                    "parse_status": agent.last_parse_status,
+                    "proposal_valid": self._proposal_is_valid(
+                        action, agent.last_parse_status),
                     "proposal_index": proposal_index,
                 })
 
             resolution_order = self.rng.sample(proposals, len(proposals))
             outcomes: dict[str, str] = {}
+            outcome_statuses: dict[str, str] = {}
+            action_succeeded: dict[str, bool] = {}
             resolution_index: dict[str, int] = {}
             moves: list[dict] = []
 
@@ -663,8 +847,14 @@ class World:
                     outcomes[agent.agent_id] = (
                         "proposal not resolved because the agent was killed before "
                         "its priority turn")
+                    outcome_statuses[agent.agent_id] = "not_resolved"
+                    action_succeeded[agent.agent_id] = False
+                    agent.last_outcome_status = "not_resolved"
+                    agent.last_action_succeeded = False
                     continue
                 outcomes[agent.agent_id] = self.resolve_action(agent, action)
+                outcome_statuses[agent.agent_id] = agent.last_outcome_status or "unknown"
+                action_succeeded[agent.agent_id] = bool(agent.last_action_succeeded)
 
             # Validate moves against the untouched pre-move positions, then
             # commit all valid moves as one phase.  Multiple agents may enter a
@@ -679,10 +869,18 @@ class World:
                     outcomes[agent.agent_id] = (
                         "proposal not resolved because the agent was killed before "
                         "the movement phase")
+                    outcome_statuses[agent.agent_id] = "not_resolved"
+                    action_succeeded[agent.agent_id] = False
+                    agent.last_outcome_status = "not_resolved"
+                    agent.last_action_succeeded = False
                 elif dest in self.adjacency.get(agent.location, ()):
                     valid_moves.append((proposal, agent.location, dest))
                 else:
                     outcomes[agent.agent_id] = f"tried to move to unreachable place {raw_dest}"
+                    outcome_statuses[agent.agent_id] = "failed"
+                    action_succeeded[agent.agent_id] = False
+                    agent.last_outcome_status = "failed"
+                    agent.last_action_succeeded = False
             for proposal, source, dest in valid_moves:
                 proposal["agent"].location = dest
             for proposal, source, dest in valid_moves:
@@ -693,6 +891,11 @@ class World:
                 else:
                     outcomes[proposal["agent"].agent_id] = (
                         f"moved to {self.location_label(dest)}")
+                agent = proposal["agent"]
+                outcome_statuses[agent.agent_id] = "success"
+                action_succeeded[agent.agent_id] = True
+                agent.last_outcome_status = "success"
+                agent.last_action_succeeded = True
 
             # All resolved outcomes become memories before the uniform body
             # update.  An agent killed by an attack is still logged for this
@@ -766,6 +969,14 @@ class World:
                     proposal_index=proposal["proposal_index"],
                     resolution_index=resolution_index[agent.agent_id],
                     proposed_action=action,
+                    pre_action_drives=proposal["decision_state"]["drives"],
+                    pre_action_position=proposal["decision_state"]["position"],
+                    pre_action_inventory=proposal["decision_state"]["inventory"],
+                    pre_action_opportunities=proposal["decision_state"]["opportunities"],
+                    parse_status=proposal["parse_status"],
+                    proposal_valid=proposal["proposal_valid"],
+                    outcome_status=outcome_statuses.get(agent.agent_id, "unknown"),
+                    action_succeeded=action_succeeded.get(agent.agent_id, False),
                     outcome=outcomes[agent.agent_id],
                     reflection_reason=reflection_reason[agent.agent_id],
                 ))

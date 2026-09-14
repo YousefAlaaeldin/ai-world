@@ -58,6 +58,32 @@ def test_proposals_share_pre_resolution_state_and_log_random_priority(tmp_path):
     assert sum(record["outcome"].startswith("consumed") for record in records) == 1
 
 
+def test_tick_records_capture_decision_state_and_realized_outcome(tmp_path):
+    agent = _agent("a0", "site")
+    agent.drives.states[DriveKind.HUNGER].level = 0.9
+    logger = RunLogger("measurement_trace", root=str(tmp_path))
+    world = World(["site", "other"], [ResourceNode("site", DriveKind.HUNGER, 1)],
+                  [agent], logger, mortality=False,
+                  adjacency={"site": {"other"}, "other": {"site"}})
+    world.run(lambda a, p, w: "consume", ticks=1)
+    logger.close()
+
+    record = _read_ticks(tmp_path, "measurement_trace")[0]
+    # The legacy drives/position fields are post-action, while these fields are
+    # the frozen state and opportunity set that actually informed the proposal.
+    assert record["pre_action_drives"]["hunger"] == 0.9
+    assert record["drives"]["hunger"] < 0.9
+    assert record["pre_action_position"] == "site"
+    assert record["pre_action_inventory"] == {}
+    assert record["pre_action_opportunities"]["resources_here"] == [
+        {"drive": "hunger", "quantity": 1}]
+    assert record["pre_action_opportunities"]["reachable_locations"] == ["other"]
+    assert record["parse_status"] is None
+    assert record["proposal_valid"] is True
+    assert record["outcome_status"] == "success"
+    assert record["action_succeeded"] is True
+
+
 def test_contested_resource_priority_varies_by_seed(tmp_path):
     winners = set()
     for seed in range(12):
@@ -229,3 +255,7 @@ def test_openai_seed_and_action_parse_failure_are_logged(tmp_path, monkeypatch):
     assert completion["raw_completion"] == "I decline to select an action."
     assert completion["parsed_output"] == "wait"
     assert completion["parse_status"] == "no_legal_action"
+    tick = _read_ticks(tmp_path, "parse_failure")[0]
+    assert tick["chosen_action"] == "wait"  # mechanical fallback is still safe
+    assert tick["parse_status"] == "no_legal_action"
+    assert tick["proposal_valid"] is False   # but analysis must not call it a choice
