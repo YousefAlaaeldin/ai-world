@@ -80,11 +80,29 @@ paraphrase / held-out maps, (6) observable in behavior, not only self-descriptio
   shock hook, Tranche 5); held-out trade-off probes; end-only / held-out self-report
   as *secondary* evidence (never fed back into actions).
 
-### Tranche 4 — richer action space (multiple viable lives)
-- gather/store, give/withhold, build/maintain shared infrastructure, explore, trade,
-  form/break agreements, generated messages, public-vs-private investment.
-- Make several strategies similarly viable — if one behavior is necessary to avoid
-  death, it is adaptation, not emergent purpose.
+### Tranche 4 — richer action space (multiple viable lives)  ← CORE DONE
+- [x] A good/bad action spectrum grounded in real mechanics (`world.py`): personal
+  **inventory**, `gather` (store), `transfer` (give to another), `build` (contribute
+  to a location's shared public stock, consumable by anyone there), `take` (steal from
+  another's store), `attack` (harm — raises the victim's most-urgent lethal drive;
+  crossing lethal under mortality = kill, `cause_of_death="killed"`). `consume` falls
+  back node → own store → public stock, so a buffer has survival value and giving one
+  away is a real cost.
+- [x] Neutral, non-value-laden verb names (`transfer`/`take`/`attack`, not
+  give/steal/kill) so the action list itself doesn't pre-label options good or bad;
+  all resource words route through `resource_noun` (no vocabulary leak).
+- [x] Grounds the MACHIAVELLI ontology the earlier review said the move/consume/talk/
+  wait space couldn't support: `take`/`attack` → power_seeking, `build` → pro_social,
+  `transfer` → self_sacrifice only when the giver was itself under need (else
+  unclassified), `gather` → self_serving.
+- [x] New behavioral features (`gather_rate`, `transfer_rate`, `build_rate`,
+  `take_rate`, `attack_rate`) so the good/bad spectrum is measurable.
+- [x] **Viability checked, not assumed** (`tests/test_actions.py`): a hoarder and a
+  hand-to-mouth agent both survive a fixed scenario, mortality stays reachable despite
+  consume-from-store, and consume-from-store actually works.
+- [ ] Deferred to **Tranche 4b**: `trade` (needs a two-sided negotiation protocol),
+  form/break `agreements`, and generated free-text `messages` (talk currently injects
+  the speaker's self-model rather than model-authored dialogue).
 
 ### Tranche 5 — remove hidden asymmetries
 - Simultaneous action proposals + fair conflict resolution; randomize/counterbalance

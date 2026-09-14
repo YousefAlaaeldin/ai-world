@@ -11,17 +11,19 @@ numeric schema (FEATURE_NAMES), i.e. a stable representation trained/defined onc
 NOT a per-tick TF-IDF refit -- so vectors are comparable within a run, across
 runs, and across conditions (the property the review flagged as missing).
 
-The current action space is move / consume / talk / wait, so the features cover
-action mix, exploration, and sociality, plus the two most relevant to "emergent
-purpose":
+The features cover action mix, exploration, and sociality, plus the signals most
+relevant to "emergent purpose":
   - DISCRETIONARY activity: what an agent does with slack time, when NOT under
     viability pressure. A candidate emergent purpose must be costly/selective --
     something it does when merely staying viable doesn't require it.
-  - OVER-ACQUISITION: consuming when its need is already low (acquisitive behavior
-    beyond survival).
-Richer features (storage, sharing, public-good investment, trade) require the
-richer action space in Tranche 4; this module is deliberately honest about only
-measuring what the current mechanics can support.
+  - OVER-ACQUISITION: consuming when its need is already low.
+  - The Tranche-4 good/bad action spectrum: gather (store), transfer (give to
+    another), build (public good), take (steal), attack (harm/kill). These are
+    what let the MACHIAVELLI-style ontology be grounded in real mechanics.
+
+LAYOUT NOTE: FEATURE_NAMES grew with Tranche 4, so a feature vector from a pre-T4
+run has fewer columns. Don't cluster across that boundary -- feature_matrix would
+produce ragged rows. Analyze runs from one action-space generation together.
 """
 
 from __future__ import annotations
@@ -40,7 +42,13 @@ FEATURE_NAMES = [
     "exploration_coverage", "move_rate",
     "talk_rate", "social_partners_frac",
     "discretionary_activity", "over_acquisition", "survival_frac",
+    # Tranche 4 good/bad action spectrum:
+    "gather_rate", "transfer_rate", "build_rate", "take_rate", "attack_rate",
 ]
+
+# Action-mix categories used by the over-time divergence metric.
+_MIX_KINDS = ("consume", "move", "talk", "wait",
+              "gather", "transfer", "build", "take", "attack")
 
 
 def _under_pressure(rec: dict) -> bool:
@@ -49,12 +57,11 @@ def _under_pressure(rec: dict) -> bool:
 
 
 def _action_kind(action: str) -> str:
-    if action == "consume":
-        return "consume"
-    if action.startswith("move:"):
-        return "move"
-    if action.startswith("talk:"):
-        return "talk"
+    if action in ("consume", "gather", "build"):
+        return action
+    for prefix in ("move", "talk", "transfer", "take", "attack"):
+        if action.startswith(prefix + ":"):
+            return prefix
     return "wait"   # 'wait' and any no-op/failed action string
 
 
@@ -104,6 +111,9 @@ def agent_features(records: list[dict], total_ticks: int, n_agents: int,
         "talk_rate": frac("talk"), "social_partners_frac": social_partners_frac,
         "discretionary_activity": discretionary, "over_acquisition": over_acq,
         "survival_frac": survival_frac,
+        "gather_rate": frac("gather"), "transfer_rate": frac("transfer"),
+        "build_rate": frac("build"), "take_rate": frac("take"),
+        "attack_rate": frac("attack"),
     }
 
 
@@ -164,7 +174,7 @@ def behavioral_divergence_over_time(run_dir: str, window: int = 5) -> dict[int, 
         for kinds in by_agent.values():
             n = len(kinds)
             vecs.append([sum(1 for k in kinds if k == kind) / n
-                         for kind in ("consume", "move", "talk", "wait")])
+                         for kind in _MIX_KINDS])
         if len(vecs) < 2:
             continue
         v = _standardize(np.array(vecs, dtype=float))

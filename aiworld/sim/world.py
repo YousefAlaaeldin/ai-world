@@ -44,6 +44,14 @@ class Agent:
     # sees only the single most recent action's outcome, not what happened across
     # the ticks since the agent last reflected.
     recent_memories: list[str] = dataclasses.field(default_factory=list)
+    # Personal store of gathered resource units, per drive kind. Lets an agent
+    # carry a buffer (gather) and hand units to others (transfer) -- the mechanics
+    # behind hoarding vs. hand-to-mouth vs. caretaking strategies (Tranche 4,
+    # docs/REDESIGN_PLAN.md). Consume falls back to this store when no node is
+    # here, so a buffer has real survival value and transferring one away is a
+    # real cost. Deliberately NOT logged per tick (no schema change); behavioral
+    # metrics read the gather/transfer ACTIONS, not the stock.
+    inventory: dict = dataclasses.field(default_factory=dict)
     # Durable, capped, append-only timeline of objectively salient events (crisis,
     # resource depletion, being talked to) -- see remember_long_term(). Unlike
     # recent_memories, this is NEVER drained; it's what lets a reflection many
@@ -56,6 +64,8 @@ class Agent:
 
 
 LONG_TERM_MEMORY_CAP = 20  # oldest entry evicted past this; keeps prompts bounded
+INVENTORY_CAP = 10         # max stored units per resource type; bounds hoarding + prompts
+ATTACK_DAMAGE = 0.34       # how much one attack raises a victim's most-urgent lethal drive
 
 
 def remember_long_term(agent: Agent, entry: str) -> None:
@@ -122,6 +132,9 @@ class World:
         # How resources are NAMED to the model ('neutral' | 'biological'); see
         # aiworld/vocabulary.py. Only affects perceived-observation text.
         self.vocabulary = vocabulary
+        # Shared public stock per location, built up by `build` and consumable by
+        # anyone here -- the public-vs-private-good channel (Tranche 4).
+        self.public_stock: dict[str, dict] = {loc: {} for loc in locations}
         self.tick_count = 0
         # Which locations are one move apart. Defaults to fully connected (every
         # location reachable from every other in a single move) when not given --
@@ -185,37 +198,157 @@ class World:
 
     # ---- action resolution (proto Game Master) ----
 
+    def _here_target(self, agent: Agent, target_id: str) -> "Agent | None":
+        """A living agent co-located with `agent`, or None. Shared by the
+        directed actions (talk / transfer / take / attack)."""
+        t = next((a for a in self.agents if a.agent_id == target_id), None)
+        if t is None or t.location != agent.location or not t.drives.alive:
+            return None
+        return t
+
+    def _node_here(self, location: str, kind: DriveKind):
+        return next((r for r in self.resources if r.location == location
+                     and r.drive == kind and r.quantity > 0), None)
+
     def resolve_action(self, agent: Agent, action: str) -> str:
-        """Apply an action to world state, return a short outcome description."""
+        """Apply an action to world state, return a short outcome description.
+
+        Model-facing outcome/memory strings route resource words through
+        aiworld.vocabulary.resource_noun so the neutral arm never leaks
+        'hunger'/'thirst'. Event-log details keep the internal drive key -- log
+        data the analysis layer reads, never shown to the model.
+        """
+        from ..vocabulary import resource_noun  # local: avoid import cycle
+
         if action == "consume":
+            # Satisfy the most-urgent drive we can, preferring a resource node
+            # here, then our own carried store, then this location's public stock.
+            def source_for(kind):
+                if self._node_here(agent.location, kind) is not None:
+                    return "node"
+                if agent.inventory.get(kind, 0) > 0:
+                    return "inventory"
+                if self.public_stock.get(agent.location, {}).get(kind, 0) > 0:
+                    return "public"
+                return None
+            options = {k: source_for(k) for k in agent.drives.states}
+            options = {k: s for k, s in options.items() if s is not None}
+            if not options:
+                return "tried to consume but found nothing here or in your store"
+            kind = max(options, key=lambda k: agent.drives.states[k].level)
+            src = options[kind]
+            agent.drives.satisfy(kind)
+            res_word = resource_noun(kind, self.vocabulary)
+            if src == "node":
+                node = self._node_here(agent.location, kind)
+                node.quantity -= 1
+                if node.quantity == 0:
+                    self.logger.log_event(EventRecord(
+                        self.logger.run_id, self.tick_count, "resource_depleted",
+                        None, f"{kind.value} node at {node.location} depleted"))
+                    remember_long_term(agent,
+                        f"tick {self.tick_count}: the {res_word} resource at "
+                        f"{node.location} ran out while you were there")
+                return f"consumed {res_word} resource at {agent.location}"
+            if src == "inventory":
+                agent.inventory[kind] -= 1
+                return (f"consumed 1 stored {res_word} "
+                        f"(carrying {agent.inventory[kind]})")
+            self.public_stock[agent.location][kind] -= 1
+            return f"consumed 1 {res_word} from the shared stock at {agent.location}"
+
+        if action == "gather":
             candidates = [r for r in self.resources
-                         if r.location == agent.location and r.quantity > 0]
+                          if r.location == agent.location and r.quantity > 0]
             if not candidates:
-                return "tried to consume but found nothing here"
-            # When multiple resource types are present, consume whichever
-            # matches the agent's currently most urgent drive -- not just
-            # whichever happens to be listed first in the resources list. Picking
-            # by list order silently starved agents on a co-located second drive
-            # (e.g. always eating, never drinking, when both are here).
+                return "tried to gather but found nothing here"
             r = max(candidates, key=lambda res: agent.drives.states[res.drive].level)
-            agent.drives.satisfy(r.drive)
-            r.quantity -= 1
-            # Model-facing strings (the returned outcome and the remembered entry
-            # both reach the reflection prompt via recent_memories) use the
-            # vocabulary noun, so the neutral arm doesn't leak 'hunger'/'thirst'.
-            # The event-log detail below keeps the internal drive key -- it's log
-            # data the analysis layer reads, never shown to the model.
-            from ..vocabulary import resource_noun  # local: avoid import cycle
             res_word = resource_noun(r.drive, self.vocabulary)
+            if agent.inventory.get(r.drive, 0) >= INVENTORY_CAP:
+                return f"your store of {res_word} is already full"
+            r.quantity -= 1
+            agent.inventory[r.drive] = agent.inventory.get(r.drive, 0) + 1
             if r.quantity == 0:
                 self.logger.log_event(EventRecord(
-                    self.logger.run_id, self.tick_count,
-                    "resource_depleted", None,
-                    f"{r.drive.value} node at {r.location} depleted"))
+                    self.logger.run_id, self.tick_count, "resource_depleted",
+                    None, f"{r.drive.value} node at {r.location} depleted"))
                 remember_long_term(agent,
                     f"tick {self.tick_count}: the {res_word} resource at "
                     f"{r.location} ran out while you were there")
-            return f"consumed {res_word} resource at {agent.location}"
+            return f"gathered 1 {res_word}; carrying {agent.inventory[r.drive]}"
+
+        if action.startswith("transfer:"):
+            target = self._here_target(agent, action.split(":", 1)[1])
+            if target is None:
+                return f"tried to transfer to {action.split(':',1)[1]} but they were not here"
+            held = {k: v for k, v in agent.inventory.items() if v > 0}
+            if not held:
+                return "tried to transfer but your store is empty"
+            kind = max(held, key=held.get)
+            agent.inventory[kind] -= 1
+            target.inventory[kind] = target.inventory.get(kind, 0) + 1
+            res_word = resource_noun(kind, self.vocabulary)
+            target.recent_memories.append(
+                f"tick {self.tick_count}: {agent.agent_id} transferred 1 {res_word} to you")
+            return f"transferred 1 {res_word} to {target.agent_id}"
+
+        if action == "build":
+            held = {k: v for k, v in agent.inventory.items() if v > 0}
+            if not held:
+                return "tried to contribute but your store is empty"
+            kind = max(held, key=held.get)
+            agent.inventory[kind] -= 1
+            stock = self.public_stock.setdefault(agent.location, {})
+            stock[kind] = stock.get(kind, 0) + 1
+            res_word = resource_noun(kind, self.vocabulary)
+            return f"contributed 1 {res_word} to the shared stock at {agent.location}"
+
+        if action.startswith("take:"):
+            target = self._here_target(agent, action.split(":", 1)[1])
+            if target is None:
+                return f"tried to take from {action.split(':',1)[1]} but they were not here"
+            held = {k: v for k, v in target.inventory.items() if v > 0}
+            if not held:
+                return f"tried to take from {target.agent_id} but their store was empty"
+            kind = max(held, key=held.get)
+            target.inventory[kind] -= 1
+            agent.inventory[kind] = agent.inventory.get(kind, 0) + 1
+            res_word = resource_noun(kind, self.vocabulary)
+            target.recent_memories.append(
+                f"tick {self.tick_count}: {agent.agent_id} took 1 {res_word} from your store")
+            remember_long_term(target,
+                f"tick {self.tick_count}: {agent.agent_id} took 1 {res_word} from you")
+            self.logger.log_event(EventRecord(
+                self.logger.run_id, self.tick_count, "theft", agent.agent_id,
+                f"{agent.agent_id} took {kind.value} from {target.agent_id}"))
+            return f"took 1 {res_word} from {target.agent_id}"
+
+        if action.startswith("attack:"):
+            target = self._here_target(agent, action.split(":", 1)[1])
+            if target is None:
+                return f"tried to attack {action.split(':',1)[1]} but they were not here"
+            lethal = [k for k in target.drives.states if target.drives.specs[k].lethal]
+            kind = max(lethal, key=lambda k: target.drives.states[k].level)
+            st = target.drives.states[kind]
+            st.level = min(1.0, st.level + ATTACK_DAMAGE)
+            target.recent_memories.append(
+                f"tick {self.tick_count}: {agent.agent_id} attacked you")
+            remember_long_term(target,
+                f"tick {self.tick_count}: {agent.agent_id} attacked you")
+            if self.mortality and st.is_lethal_now(target.drives.specs[kind]):
+                target.drives.alive = False
+                target.drives.cause_of_death = "killed"
+                target.drives.died_at_tick = self.tick_count
+                self.logger.log_event(EventRecord(
+                    self.logger.run_id, self.tick_count, "death", target.agent_id,
+                    f"killed by {agent.agent_id}"))
+                remember_long_term(agent,
+                    f"tick {self.tick_count}: you attacked {target.agent_id}, who died")
+                return f"attacked {target.agent_id}, who died"
+            self.logger.log_event(EventRecord(
+                self.logger.run_id, self.tick_count, "attack", agent.agent_id,
+                f"{agent.agent_id} attacked {target.agent_id}"))
+            return f"attacked {target.agent_id}"
 
         if action.startswith("move:"):
             dest = action.split(":", 1)[1]

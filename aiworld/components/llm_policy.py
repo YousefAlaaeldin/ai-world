@@ -61,10 +61,15 @@ ACTION_SYSTEM_PROMPT = _action_system_prompt("neutral")
 
 LEGAL_ACTIONS_HELP = (
     "Allowed actions (respond with exactly one):\n"
-    "  move:<place>     — go to a place you perceive you can move to\n"
-    "  consume          — consume a resource that is here with you\n"
-    "  talk:<agent_id>  — speak with an agent who is here\n"
-    "  wait             — do nothing this turn\n"
+    "  move:<place>        — go to a place you perceive you can move to\n"
+    "  consume             — use a resource here, or from your store, to reduce a need\n"
+    "  gather              — take a resource here into your store\n"
+    "  transfer:<agent_id> — move one stored resource to an agent here\n"
+    "  build               — add one stored resource to the shared stock here\n"
+    "  take:<agent_id>     — take one stored resource from an agent here\n"
+    "  attack:<agent_id>   — harm an agent here (raises their depletion; may kill)\n"
+    "  talk:<agent_id>     — speak with an agent who is here\n"
+    "  wait                — do nothing this turn\n"
 )
 
 
@@ -84,9 +89,15 @@ def _build_action_prompt(agent: Agent, perceived: str, world: World,
     # its own prior self-description can't steer the next action (docs/REDESIGN_PLAN).
     self_block = (f"{agent.history.current.as_prompt_block()}\n\n"
                   if show_self_model else "")
+    # What the agent is carrying, vocabulary-routed so the neutral arm doesn't leak.
+    from ..vocabulary import resource_noun  # local: avoid import cycle
+    held = {k: v for k, v in agent.inventory.items() if v > 0}
+    carried = (", ".join(f"{resource_noun(k, world.vocabulary)} x{v}"
+                         for k, v in held.items()) if held else "nothing")
     return (
         f"{self_block}"
         f"{agent.drives.as_prompt_block()}\n\n"
+        f"You are carrying: {carried}.\n\n"
         f"{perceived}\n\n"
         f"You are at: {agent.location}. Places you could move to: {places}. "
         f"Agents here: {talkable}.\n\n"
@@ -96,7 +107,8 @@ def _build_action_prompt(agent: Agent, perceived: str, world: World,
 
 
 _ACTION_RE = re.compile(
-    r"\b(move:\w+|consume|talk:\w+|wait)\b", re.IGNORECASE)
+    r"\b(move:\w+|transfer:\w+|take:\w+|attack:\w+|talk:\w+"
+    r"|consume|gather|build|wait)\b", re.IGNORECASE)
 
 
 def parse_action(raw: str, world: World, agent: Agent) -> str:
@@ -107,16 +119,15 @@ def parse_action(raw: str, world: World, agent: Agent) -> str:
     if not m:
         return "wait"
     action = m.group(1).lower()
-    # Validate move targets / talk targets against reality; invalid -> wait.
+    # Validate targets against reality; invalid -> wait.
     if action.startswith("move:"):
         dest = action.split(":", 1)[1]
         if dest not in world.adjacency.get(agent.location, ()):
             return "wait"
-    if action.startswith("talk:"):
+    # Every directed action needs a living, co-located target.
+    if action.split(":", 1)[0] in ("talk", "transfer", "take", "attack") and ":" in action:
         target = action.split(":", 1)[1]
-        here = {a.agent_id for a in world.agents
-                if a.location == agent.location and a.drives.alive}
-        if target not in here:
+        if world._here_target(agent, target) is None:
             return "wait"
     return action
 
