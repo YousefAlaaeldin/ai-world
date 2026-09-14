@@ -1,5 +1,13 @@
 # Redesign Plan — de-primed baseline + behavioral measurement
 
+**Paper claim:** *"Emergent behavioral organization under unassigned objectives in
+LLM agents."* Note what this commits the work to: the outcome is **behavioral
+organization** (structure in what agents *do*), and "unassigned" is the load-bearing
+adjective — so the primary result must come from the de-primed baseline measured by
+behavior, not from self-report text under a "survive/find your purpose" directive.
+Tranche 3's metrics are what substantiate "behavioral organization"; Tranche 1's
+de-priming is what earns "unassigned."
+
 Driven by external review (see conversation 2026-09-14). The project's defensible
 question is **not** "agents with no priors" (no LLM is a blank slate) but:
 
@@ -96,6 +104,12 @@ minimal behavioral feature extractor forward into Tranche 1. Chosen: **(a)** —
 ships scaffolding + the bug fix with today's behavior preserved as the default arm; no
 un-analyzable baseline config is shipped.
 
-**Also pending:** the paper's replacement central claim (the reviewer's message was cut
-off at "Instead of: 'What do agents become when nothing is assigned?'"). That wording
-shapes what Tranche 3 must measure.
+**Resolved:** the paper's central claim is *"Emergent behavioral organization under
+unassigned objectives in LLM agents"* (recorded at the top of this file). This pins
+Tranche 3's primary outcome to **behavioral** organization measured in the de-primed
+(unassigned) baseline — self-report is secondary and never fed back.
+
+**Still pending:** propagate this reframing (behavioral-organization claim; de-primed
+baseline as the primary condition) into the three paper docs — PAPER_OUTLINE,
+RESEARCH_PROPOSAL, RESEARCH_PITCH — which still carry the older "what do agents
+become when nothing is assigned" framing.
