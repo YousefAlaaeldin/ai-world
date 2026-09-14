@@ -289,9 +289,16 @@ class World:
                 scheduled = self.tick_count % reflect_every == 0
                 crisis_triggered = agent.drives.in_crisis() and not was_in_crisis
                 if crisis_triggered:
-                    remember_long_term(agent,
-                        f"tick {self.tick_count}: nearly died from "
-                        f"{'/'.join(agent.drives.crisis_drives())}")
+                    # Frame the memory to match the actual stakes. Telling an
+                    # IMMORTAL agent it "nearly died" injects death-pressure into
+                    # the very arm meant to have none, contaminating the mortality
+                    # on/off contrast -- so immortal agents get a neutral
+                    # depletion phrasing instead. Same class of leak as the
+                    # "survive" directive: framing, not mechanics.
+                    drives_str = "/".join(agent.drives.crisis_drives())
+                    phrase = (f"nearly died from {drives_str}" if self.mortality
+                              else f"was severely depleted of {drives_str}")
+                    remember_long_term(agent, f"tick {self.tick_count}: {phrase}")
                 if reflect_fn and (scheduled or crisis_triggered):
                     reflect_fn(agent, perceived, outcome, self.tick_count,
                               reason=("crisis" if crisis_triggered else "scheduled"))

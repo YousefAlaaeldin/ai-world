@@ -251,6 +251,21 @@ def test_crisis_triggers_immediate_reflection(tmp_path):
     assert any("nearly died from hunger" in m for m in agent.long_term_memory)
 
 
+def test_immortal_crisis_memory_avoids_death_framing(tmp_path):
+    # In immortal mode the agent CANNOT die, so a "nearly died" memory would
+    # inject death-pressure into the arm designed to have none (contaminating the
+    # mortality on/off contrast). It must use neutral depletion wording instead.
+    specs = {DriveKind.HUNGER: DriveSpec(DriveKind.HUNGER, decay_per_tick=0.9,
+                                         replenish_amount=1.0, lethal=True)}
+    agent = Agent("a0", "loc", DriveSystem(specs=specs), SelfModelHistory("a0"))
+    logger = RunLogger("test_immortal_crisis", root=str(tmp_path))
+    world = World(["loc"], [], [agent], logger, mortality=False)
+    world.run(lambda a, p, w: "wait", ticks=1, reflect_every=1000, reflect_fn=None)
+    logger.close()
+    assert any("severely depleted" in m for m in agent.long_term_memory)
+    assert not any("died" in m for m in agent.long_term_memory)
+
+
 def test_resource_depletion_persists_to_long_term_memory(tmp_path):
     resources = [ResourceNode("loc", DriveKind.HUNGER, quantity=1)]
     agent = Agent("a0", "loc", DriveSystem(), SelfModelHistory("a0"))
