@@ -63,14 +63,22 @@ paraphrase / held-out maps, (6) observable in behavior, not only self-descriptio
   ledger: `tick 15: used R3; S1 0.31 -> 0.77`, `tick 16: message from A7`.
 - Add an `opaque` vocabulary arm (`S1/S2`, `R1/R2/R3`) alongside neutral/biological.
 
-### Tranche 3 — behavioral metrics (unblocks the baseline)
-- Primary outcome becomes a **behavioral trajectory**, not self-model embedding distance:
-  resource acquisition/use/storage/sharing, exploration coverage, discretionary-vs-
-  viability time, social-network formation, public-good investment, strategy persistence
-  after perturbation, held-out trade-off probes.
-- Cluster behavior on a **fixed representation trained once across all conditions**;
-  choose k by stability/null tests, not a forced k=5.
-- End-only / held-out self-report as *secondary* evidence, never fed back into actions.
+### Tranche 3 — behavioral metrics (unblocks the baseline)  ← CORE DONE
+- [x] Primary outcome is now a **behavioral** feature vector, not self-model embedding
+  distance (`aiworld/analysis/behavioral_metrics.py`, `scripts/analyze_behavior.py`):
+  action mix, exploration coverage, discretionary-vs-viability activity, over-
+  acquisition, sociality, survival. Fixed schema (`FEATURE_NAMES`) = a stable
+  representation, comparable within/across runs and conditions.
+- [x] `behavioral_divergence_over_time` — the behavioral analogue of the self-model
+  divergence metric (windowed action-mix spread across agents vs. tick).
+- [x] `cluster_behaviors` — clusters whole-run behavior on one standardized
+  representation, **chooses k by silhouette** (not a forced k=5), and compares to a
+  column-shuffled **null** (`clusters_beat_null`) so recurrence isn't mistaken for
+  structure.
+- [ ] Deferred: resource **storage/sharing/public-good/trade** features (need the
+  richer action space, Tranche 4); strategy-persistence-after-perturbation (needs the
+  shock hook, Tranche 5); held-out trade-off probes; end-only / held-out self-report
+  as *secondary* evidence (never fed back into actions).
 
 ### Tranche 4 — richer action space (multiple viable lives)
 - gather/store, give/withhold, build/maintain shared infrastructure, explore, trade,
@@ -97,12 +105,12 @@ paraphrase / held-out maps, (6) observable in behavior, not only self-descriptio
 ## Open tradeoff to resolve (needs the user)
 
 With reflection off, `SelfModelHistory` never advances past v0, so `divergence_over_time`
-and `cluster_final_purposes` return **nothing** for the baseline — the baseline has no
-analyzable outcome until Tranche 3 lands. Options: (a) land Tranche 1 as pure
-capability + leak-fix and don't run a baseline experiment until Tranche 3; or (b) pull a
-minimal behavioral feature extractor forward into Tranche 1. Chosen: **(a)** — Tranche 1
-ships scaffolding + the bug fix with today's behavior preserved as the default arm; no
-un-analyzable baseline config is shipped.
+and `cluster_final_purposes` (self-model TEXT metrics) return **nothing** for the
+baseline. This was the blocker for shipping a runnable de-primed baseline. **Resolved by
+Tranche 3:** `aiworld/analysis/behavioral_metrics.py` analyzes the baseline by BEHAVIOR
+(action stream) instead, so a de-primed baseline config is now analyzable. A runnable
+baseline config can be added next (still gated on the user wanting to spend live-model
+runs on it).
 
 **Resolved:** the paper's central claim is *"Emergent behavioral organization under
 unassigned objectives in LLM agents"* (recorded at the top of this file). This pins

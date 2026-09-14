@@ -93,7 +93,16 @@ writes one such directory per seed under `runs/<experiment_name>/seed_<k>/`.
 ## Analysis
 
 ```bash
-# Divergence over time for one run, or purpose-clusters across a sweep:
+# BEHAVIORAL organization — what agents DO (the primary outcome for the
+# "emergent behavioral organization under unassigned objectives" claim, and the
+# only thing the de-primed baseline produces). Per-agent behavioral fingerprint +
+# behavioral divergence over time; --sweep clusters whole-run behavior with the
+# cluster count chosen by silhouette (not a forced k) against a null baseline:
+python scripts/analyze_behavior.py --run runs/live01
+python scripts/analyze_behavior.py --sweep runs/minimal_divergence
+
+# Divergence over time for one run, or purpose-clusters across a sweep, on the
+# self-model TEXT (a self-narrative-arm outcome, not the de-primed baseline):
 python scripts/analyze_run.py --run runs/live01
 python scripts/analyze_run.py --sweep runs/minimal_divergence --clusters 5
 
@@ -108,7 +117,7 @@ python scripts/trace_causes.py --run runs/live01
 python scripts/trace_causes.py --run runs/live01 --narrate
 ```
 
-All four tools default to zero LLM cost — they read the JSONL logs directly.
+All five tools default to zero LLM cost — they read the JSONL logs directly.
 Anything that does call the model is explicit opt-in (`--llm`, `--narrate`) and
 its output is always labeled as something to hand-verify, never ground truth
 (DESIGN.md §7).
