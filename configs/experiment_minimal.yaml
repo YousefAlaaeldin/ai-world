@@ -26,6 +26,12 @@ world:
     - {location: east,  drive: hunger, quantity: 15}
     - {location: west,  drive: thirst, quantity: 15}
   mortality: true
+  # How internal state / resources are NAMED to the model (aiworld/vocabulary.py).
+  # 'neutral' (default) strips biological priors so emergent power-seeking/self-
+  # preservation can't be dismissed as the model role-playing a hungry human;
+  # 'biological' restores food/hunger framing as the CONTRAST arm. Swapping the two
+  # is a confound control, like reflection.prompt below. Log keys stay unchanged.
+  vocabulary: neutral   # neutral | biological
 
 agents:
   count: 6

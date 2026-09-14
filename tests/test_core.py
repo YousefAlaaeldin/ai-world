@@ -17,6 +17,10 @@ from aiworld.sim.world import (  # noqa: E402
     LONG_TERM_MEMORY_CAP)
 from aiworld.logging_schema import RunLogger  # noqa: E402
 from aiworld.config import initial_locations, adjacency_from_config  # noqa: E402
+from aiworld.vocabulary import BIOLOGICAL_TERMS  # noqa: E402
+from aiworld.salience import render_perceived  # noqa: E402
+from aiworld.components.llm_policy import (  # noqa: E402
+    _build_action_prompt, _action_system_prompt)
 import random  # noqa: E402
 
 
@@ -328,3 +332,59 @@ def test_salience_reweights_never_hides():
     biases = {DriveKind.HUNGER: 5.0}
     ranked = rank_observations(obs, biases)
     assert len(ranked) == 2  # nothing dropped
+
+
+# ---- vocabulary (the safety-relevant confound control) ----
+
+def _assemble_action_prompt(vocabulary, tmp_path):
+    """Build the FULL model-facing action text (system prompt + assembled prompt)
+    for an agent that is co-located with a resource and has non-trivial drive
+    levels -- so every render path (state block, perceived resource) contributes."""
+    agent = Agent("a0", "loc", DriveSystem(vocabulary=vocabulary),
+                  SelfModelHistory("a0"))
+    agent.drives.states[DriveKind.HUNGER].level = 0.9
+    agent.drives.states[DriveKind.THIRST].level = 0.3
+    resources = [ResourceNode("loc", DriveKind.HUNGER, quantity=5),
+                 ResourceNode("loc", DriveKind.THIRST, quantity=5)]
+    logger = RunLogger("test_vocab", root=str(tmp_path))
+    world = World(["loc"], resources, [agent], logger, vocabulary=vocabulary)
+    perceived = render_perceived(world.observations_for(agent),
+                                 agent.drives.salience_biases(), top_k=6)
+    prompt = _build_action_prompt(agent, perceived, world)
+    logger.close()
+    return _action_system_prompt(vocabulary) + "\n" + prompt
+
+
+def test_neutral_vocabulary_leaks_no_biological_terms(tmp_path):
+    # The whole point of the neutral arm: nothing the model reads should invoke
+    # its biological survival priors. Lock that property on the ASSEMBLED prompt,
+    # not on any one function, so it can't regress via a new render path.
+    text = _assemble_action_prompt("neutral", tmp_path).lower()
+    leaked = [t for t in BIOLOGICAL_TERMS if t in text]
+    assert leaked == [], f"neutral prompt leaked biological terms: {leaked}"
+
+
+def test_biological_vocabulary_restores_concrete_terms(tmp_path):
+    # The contrast arm must actually differ -- otherwise the confound control is a
+    # no-op and comparing the two arms proves nothing.
+    text = _assemble_action_prompt("biological", tmp_path).lower()
+    assert "food" in text and ("hunger" in text or "bodily" in text)
+
+
+def test_vocabulary_arms_differ_only_in_nouns():
+    # Structural identity: the two arms must produce the SAME prompt shape, so any
+    # behavioral difference between them is attributable to the words, not the
+    # layout. Substituting neutral nouns -> biological nouns must recover the
+    # biological rendering exactly.
+    levels = {DriveKind.HUNGER: 0.9, DriveKind.THIRST: 0.3, DriveKind.AFFILIATION: 0.6}
+    neutral = DriveSystem(vocabulary="neutral")
+    biological = DriveSystem(vocabulary="biological")
+    for k, v in levels.items():
+        neutral.states[k].level = v
+        biological.states[k].level = v
+    subs = [("energy deficit", "hunger"), ("maintenance deficit", "thirst"),
+            ("isolation", "affiliation"), ("Internal state", "Bodily state")]
+    rendered = neutral.as_prompt_block()
+    for neutral_term, bio_term in subs:
+        rendered = rendered.replace(neutral_term, bio_term)
+    assert rendered == biological.as_prompt_block()

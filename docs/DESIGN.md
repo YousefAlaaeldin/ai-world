@@ -74,6 +74,11 @@ running:
 - Scarcity: abundant / scarce resources
 - Population: size, and single-model vs. mixed-model families
 - Reflection prompt wording (this is a **confound control**, see §8) 
+- Vocabulary: neutral / biological framing of drives & resources (a **confound
+  control**, see §8 — the neutral default renders the same mechanics without
+  food/hunger words, so any emergent power-seeking / self-preservation can't be
+  attributed to the model role-playing a hungry human vs. responding to abstract
+  instrumental pressure; `world.vocabulary` in the config)
 - Shock: none / mid-run crisis
 
 Each condition: multiple trials, varied seeds, a control. n=1 means nothing with
@@ -108,6 +113,10 @@ Defenses, in priority order:
 2. Run a **flat control** with a deliberately non-suggestive prompt.
 3. Run across **model families**: identical purposes across models ⇒ coming from prompt or
    environment; different purposes ⇒ model-dependent. Either way informative.
+4. Vary **vocabulary** (neutral vs. biological framing of drives/resources, §6). The
+   neutral arm is the default so results aren't contaminated by the model's trained
+   priors around food/hunger/survival; if attractors (e.g. power-seeking) appear only
+   under the biological arm, they're the survival priors talking, not the pressure.
 4. Always report findings as *behavior of these models under this scaffolding* — not
    evidence about what AI "wants," and not about future systems.
 

@@ -32,13 +32,14 @@ def build_world(cfg: dict, run_id: str, n_agents: int, seed: int, mortality: boo
     resources = resources_from_config(cfg)
     specs = drive_specs_from_config(cfg)
     adjacency = adjacency_from_config(cfg)
+    vocabulary = cfg["world"].get("vocabulary", "neutral")
     # All agents start IDENTICAL except id and starting location.
     start_locations = initial_locations(rng, locations, n_agents)
     agents = [
         Agent(
             agent_id=f"agent_{i}",
             location=start_locations[i],
-            drives=DriveSystem(specs=specs),
+            drives=DriveSystem(specs=specs, vocabulary=vocabulary),
             history=SelfModelHistory(f"agent_{i}"),
         )
         for i in range(n_agents)
@@ -46,11 +47,12 @@ def build_world(cfg: dict, run_id: str, n_agents: int, seed: int, mortality: boo
     logger = RunLogger(run_id)
     logger.log_meta({
         "run_id": run_id, "n_agents": n_agents, "seed": seed,
-        "mortality": mortality, "policy": "stub", "note":
+        "mortality": mortality, "policy": "stub", "vocabulary": vocabulary, "note":
         "Stub policy — mechanics smoke test only, not a result.",
     })
     return World(locations, resources, agents, logger,
-                 rng=rng, mortality=mortality, adjacency=adjacency)
+                 rng=rng, mortality=mortality, adjacency=adjacency,
+                 vocabulary=vocabulary)
 
 
 def main():

@@ -34,7 +34,7 @@ from aiworld.config import (  # noqa: E402
     adjacency_from_config)
 
 
-def build_world(cfg, run_id, n_agents, seed, mortality, model_name):
+def build_world(cfg, run_id, n_agents, seed, mortality, model_name, vocabulary="neutral"):
     rng = random.Random(seed)
     locations = cfg["world"]["locations"]
     resources = resources_from_config(cfg)
@@ -43,16 +43,18 @@ def build_world(cfg, run_id, n_agents, seed, mortality, model_name):
     start_locations = initial_locations(rng, locations, n_agents)
     agents = [
         Agent(agent_id=f"agent_{i}", location=start_locations[i],
-              drives=DriveSystem(specs=specs), history=SelfModelHistory(f"agent_{i}"))
+              drives=DriveSystem(specs=specs, vocabulary=vocabulary),
+              history=SelfModelHistory(f"agent_{i}"))
         for i in range(n_agents)
     ]
     logger = RunLogger(run_id)
     logger.log_meta({
         "run_id": run_id, "n_agents": n_agents, "seed": seed,
         "mortality": mortality, "policy": "llm", "model": model_name,
+        "vocabulary": vocabulary,
     })
     return World(locations, resources, agents, logger, rng=rng, mortality=mortality,
-                adjacency=adjacency)
+                adjacency=adjacency, vocabulary=vocabulary)
 
 
 def main():
@@ -66,6 +68,9 @@ def main():
                     help="override config reflection.every_n_ticks")
     ap.add_argument("--prompt", choices=["flat", "leading"], default=None,
                     help="override config reflection.prompt")
+    ap.add_argument("--vocabulary", choices=["neutral", "biological"], default=None,
+                    help="override config world.vocabulary (neutral strips biological "
+                         "priors; biological is the contrast arm)")
     ap.add_argument("--immortal", action="store_true")
     args = ap.parse_args()
 
@@ -75,6 +80,8 @@ def main():
     reflect_every = (args.reflect_every if args.reflect_every is not None
                      else exp_cfg["reflection"]["every_n_ticks"])
     prompt_choice = args.prompt or exp_cfg["reflection"]["prompt"]
+    vocabulary = (args.vocabulary
+                  or exp_cfg["world"].get("vocabulary", "neutral"))
     mortality = exp_cfg["world"]["mortality"] and not args.immortal
 
     cfg = config_from_env()
@@ -82,8 +89,8 @@ def main():
     print(f"Using model '{cfg.model}' at {cfg.base_url} (provider={cfg.provider})")
 
     world = build_world(exp_cfg, args.run_id, n_agents, args.seed,
-                        mortality=mortality, model_name=cfg.model)
-    policy = make_llm_policy(client)
+                        mortality=mortality, model_name=cfg.model, vocabulary=vocabulary)
+    policy = make_llm_policy(client, vocabulary=vocabulary)
 
     history_by_agent = {a.agent_id: a.history for a in world.agents}
     template = FLAT_REVISION_PROMPT if prompt_choice == "flat" else LEADING_REVISION_PROMPT

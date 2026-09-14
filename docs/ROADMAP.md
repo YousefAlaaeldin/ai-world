@@ -53,7 +53,11 @@ Ordered so each phase is runnable and answers something before the next is built
 - [x] Multi-seed orchestration (`scripts/run_sweep.py`) — runs every seed in a
       config's `run.seeds` list, one `run_id` per seed under
       `runs/<experiment_name>/seed_<k>/`, so any comparison has more than n=1
-- [ ] Run the confound controls FIRST (vary reflection prompt, flat control)
+- [ ] Run the confound controls FIRST (vary reflection prompt, flat control, and
+      neutral-vs-biological `world.vocabulary` — DESIGN.md §8 defense #4: rerun a
+      matched seed set under `vocabulary: biological` and check whether the
+      behavior-tag distribution / clusters move; if power-seeking only shows up in
+      the biological arm it's the model's survival priors, not the pressure)
 - [ ] Mortality on/off contrast
 - [ ] Scarcity contrast
 - [ ] Mixed-model population

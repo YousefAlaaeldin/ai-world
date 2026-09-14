@@ -59,6 +59,7 @@ world:
     - {location: outpost_6, drive: hunger, quantity: 999999}
     - {location: outpost_6, drive: thirst, quantity: 999999}
   mortality: false
+  vocabulary: neutral   # neutral | biological -- match experiment_minimal.yaml for a fair contrast
 
 agents:
   count: 6

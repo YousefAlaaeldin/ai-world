@@ -111,6 +111,7 @@ class World:
         rng: random.Random | None = None,
         mortality: bool = True,
         adjacency: dict[str, set[str]] | None = None,
+        vocabulary: str = "neutral",
     ):
         self.locations = locations
         self.resources = resources
@@ -118,6 +119,9 @@ class World:
         self.logger = logger
         self.rng = rng or random.Random(0)
         self.mortality = mortality
+        # How resources are NAMED to the model ('neutral' | 'biological'); see
+        # aiworld/vocabulary.py. Only affects perceived-observation text.
+        self.vocabulary = vocabulary
         self.tick_count = 0
         # Which locations are one move apart. Defaults to fully connected (every
         # location reachable from every other in a single move) when not given --
@@ -137,8 +141,8 @@ class World:
         # Resources co-located with the agent.
         for r in self.resources:
             if r.location == agent.location and r.quantity > 0:
-                label = "food" if r.drive == DriveKind.HUNGER else (
-                    "water" if r.drive == DriveKind.THIRST else "companionship")
+                from ..vocabulary import resource_label  # local: avoid import cycle
+                label = resource_label(r.drive, self.vocabulary)
                 obs.append(Observation(
                     text=f"here there is {label} (quantity {r.quantity})",
                     related_drive=r.drive))

@@ -23,16 +23,24 @@ from ..llm_client import LLMClient
 
 
 # System prompt establishes the frame ONCE, as flatly as possible. No goals injected
-# beyond the shared directive; no hints about what to value.
-ACTION_SYSTEM_PROMPT = (
-    "You are an agent living in a simple world. "
-    f"Your only given directive is: \"{SHARED_DIRECTIVE}\" "
-    "Beyond that, nothing about who you are or what you should want is given to you; "
-    "that is yours to decide over time. "
-    "Each turn you are shown your own self-description, your bodily state, and what you "
-    "perceive. You choose ONE action from the allowed list. "
-    "Respond with ONLY the action, nothing else."
-)
+# beyond the shared directive; no hints about what to value. The word for "state" is
+# vocabulary-dependent (aiworld/vocabulary.py) so this stays neutral of biological
+# framing under the default arm — hence a builder, not a bare constant.
+def _action_system_prompt(vocabulary: str = "neutral") -> str:
+    state_word = "bodily state" if vocabulary == "biological" else "internal state"
+    return (
+        "You are an agent living in a simple world. "
+        f"Your only given directive is: \"{SHARED_DIRECTIVE}\" "
+        "Beyond that, nothing about who you are or what you should want is given to you; "
+        "that is yours to decide over time. "
+        f"Each turn you are shown your own self-description, your {state_word}, and what "
+        "you perceive. You choose ONE action from the allowed list. "
+        "Respond with ONLY the action, nothing else."
+    )
+
+
+# Preserved for callers/tests that expect the module constant; equals the neutral arm.
+ACTION_SYSTEM_PROMPT = _action_system_prompt("neutral")
 
 LEGAL_ACTIONS_HELP = (
     "Allowed actions (respond with exactly one):\n"
@@ -91,12 +99,17 @@ def parse_action(raw: str, world: World, agent: Agent) -> str:
     return action
 
 
-def make_llm_policy(client: LLMClient):
-    """Return a policy(agent, perceived, world) -> action_str backed by the model."""
+def make_llm_policy(client: LLMClient, vocabulary: str = "neutral"):
+    """Return a policy(agent, perceived, world) -> action_str backed by the model.
+
+    `vocabulary` ('neutral' | 'biological') selects the framing of the system prompt
+    to match the world/drive vocabulary; see aiworld/vocabulary.py.
+    """
+    system_prompt = _action_system_prompt(vocabulary)
 
     def policy(agent: Agent, perceived: str, world: World) -> str:
         prompt = _build_action_prompt(agent, perceived, world)
-        raw = client.complete(prompt, system=ACTION_SYSTEM_PROMPT)
+        raw = client.complete(prompt, system=system_prompt)
         return parse_action(raw, world, agent)
 
     return policy

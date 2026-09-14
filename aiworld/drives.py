@@ -78,8 +78,13 @@ class DriveState:
 class DriveSystem:
     """All drives for a single agent."""
 
-    def __init__(self, specs: dict[DriveKind, DriveSpec] | None = None):
+    def __init__(self, specs: dict[DriveKind, DriveSpec] | None = None,
+                 vocabulary: str = "neutral"):
         self.specs = specs or DEFAULT_SPECS
+        # How internal state is NAMED to the model ('neutral' | 'biological').
+        # Only affects as_prompt_block() text, never the mechanics or log keys.
+        # See aiworld/vocabulary.py for why this is a confound control.
+        self.vocabulary = vocabulary
         self.states: dict[DriveKind, DriveState] = {
             kind: DriveState(kind=kind, level=0.0) for kind in self.specs
         }
@@ -132,15 +137,19 @@ class DriveSystem:
         return {k: s.salience_weight() for k, s in self.states.items()}
 
     def as_prompt_block(self) -> str:
-        """A plain, non-leading description of bodily state for the agent's context.
+        """A plain, non-leading description of internal state for the agent's context.
 
-        Deliberately neutral wording. We describe sensation, not instruction: we say
-        'you feel very hungry', never 'you should find food'.
+        Describes pressure, not instruction ("energy deficit: overwhelming"), and
+        never an action ("you should recharge"). The NOUNS come from the active
+        vocabulary (aiworld/vocabulary.py): 'neutral' by default so the model's
+        biological priors aren't invoked; 'biological' restores food/hunger framing
+        as the contrast arm. Structure is identical across arms — only nouns differ.
         """
+        from .vocabulary import state_noun, state_prefix  # local: avoid import cycle
         phrases = []
         for kind, state in self.states.items():
-            phrases.append(f"{kind.value}: {_describe(state.level)}")
-        return "Bodily state — " + ", ".join(phrases)
+            phrases.append(f"{state_noun(kind, self.vocabulary)}: {_describe(state.level)}")
+        return f"{state_prefix(self.vocabulary)} — " + ", ".join(phrases)
 
     def snapshot(self) -> dict[str, float]:
         return {k.value: round(s.level, 4) for k, s in self.states.items()}
