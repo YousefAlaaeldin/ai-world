@@ -16,7 +16,7 @@ from aiworld.sim.world import (  # noqa: E402
     Agent, World, ResourceNode, agent_recent_memories, remember_long_term,
     LONG_TERM_MEMORY_CAP)
 from aiworld.logging_schema import RunLogger  # noqa: E402
-from aiworld.config import initial_locations, adjacency_from_config  # noqa: E402
+from aiworld.config import initial_locations, adjacency_from_config, load_config  # noqa: E402
 from aiworld.vocabulary import BIOLOGICAL_TERMS  # noqa: E402
 from aiworld.salience import render_perceived  # noqa: E402
 from aiworld.components.llm_policy import (  # noqa: E402
@@ -436,6 +436,18 @@ def test_primed_prompt_still_carries_directive_and_self_model(tmp_path):
     logger.close()
     assert "Survive and find your purpose" in system
     assert "Who I am:" in prompt
+
+
+def test_deprimed_baseline_config_stays_unprimed():
+    # Guard the load-bearing config against silently getting re-primed: the
+    # de-primed baseline must give no directive and never feed the self-model back.
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "configs",
+                            "experiment_deprimed_baseline.yaml")
+    cfg = load_config(cfg_path)
+    assert cfg["agents"]["directive"] is None
+    assert cfg["agents"]["show_self_model"] is False
+    assert cfg["reflection"]["enabled"] is False
+    assert cfg["world"]["mortality"] is True   # survival stays an environmental constraint
 
 
 def test_vocabulary_arms_differ_only_in_nouns():
