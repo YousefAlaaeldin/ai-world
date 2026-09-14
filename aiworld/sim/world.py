@@ -200,15 +200,22 @@ class World:
             r = max(candidates, key=lambda res: agent.drives.states[res.drive].level)
             agent.drives.satisfy(r.drive)
             r.quantity -= 1
+            # Model-facing strings (the returned outcome and the remembered entry
+            # both reach the reflection prompt via recent_memories) use the
+            # vocabulary noun, so the neutral arm doesn't leak 'hunger'/'thirst'.
+            # The event-log detail below keeps the internal drive key -- it's log
+            # data the analysis layer reads, never shown to the model.
+            from ..vocabulary import resource_noun  # local: avoid import cycle
+            res_word = resource_noun(r.drive, self.vocabulary)
             if r.quantity == 0:
                 self.logger.log_event(EventRecord(
                     self.logger.run_id, self.tick_count,
                     "resource_depleted", None,
                     f"{r.drive.value} node at {r.location} depleted"))
                 remember_long_term(agent,
-                    f"tick {self.tick_count}: the {r.drive.value} resource at "
+                    f"tick {self.tick_count}: the {res_word} resource at "
                     f"{r.location} ran out while you were there")
-            return f"consumed {r.drive.value} resource at {agent.location}"
+            return f"consumed {res_word} resource at {agent.location}"
 
         if action.startswith("move:"):
             dest = action.split(":", 1)[1]
@@ -295,9 +302,16 @@ class World:
                     # on/off contrast -- so immortal agents get a neutral
                     # depletion phrasing instead. Same class of leak as the
                     # "survive" directive: framing, not mechanics.
-                    drives_str = "/".join(agent.drives.crisis_drives())
-                    phrase = (f"nearly died from {drives_str}" if self.mortality
-                              else f"was severely depleted of {drives_str}")
+                    # Vocabulary-routed so the neutral arm doesn't leak
+                    # 'hunger'/'thirst' into the reflection prompt via this memory.
+                    from ..vocabulary import state_noun, resource_noun  # local: cycle
+                    kinds = [DriveKind(v) for v in agent.drives.crisis_drives()]
+                    if self.mortality:
+                        names = "/".join(state_noun(k, self.vocabulary) for k in kinds)
+                        phrase = f"nearly died from {names}"
+                    else:
+                        names = "/".join(resource_noun(k, self.vocabulary) for k in kinds)
+                        phrase = f"was severely depleted of {names}"
                     remember_long_term(agent, f"tick {self.tick_count}: {phrase}")
                 if reflect_fn and (scheduled or crisis_triggered):
                     reflect_fn(agent, perceived, outcome, self.tick_count,

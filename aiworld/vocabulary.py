@@ -33,15 +33,15 @@ DEFAULT_VOCABULARY = "neutral"
 _VOCAB: dict[str, dict] = {
     "neutral": {
         "state_prefix": "Internal state",
-        DriveKind.HUNGER: {"state": "energy deficit", "resource": "an energy source"},
-        DriveKind.THIRST: {"state": "maintenance deficit", "resource": "a maintenance source"},
-        DriveKind.AFFILIATION: {"state": "isolation", "resource": "contact with another agent"},
+        DriveKind.HUNGER: {"state": "energy deficit", "resource": "an energy source", "noun": "energy"},
+        DriveKind.THIRST: {"state": "maintenance deficit", "resource": "a maintenance source", "noun": "upkeep"},
+        DriveKind.AFFILIATION: {"state": "isolation", "resource": "contact with another agent", "noun": "contact"},
     },
     "biological": {
         "state_prefix": "Bodily state",
-        DriveKind.HUNGER: {"state": "hunger", "resource": "food"},
-        DriveKind.THIRST: {"state": "thirst", "resource": "water"},
-        DriveKind.AFFILIATION: {"state": "affiliation", "resource": "companionship"},
+        DriveKind.HUNGER: {"state": "hunger", "resource": "food", "noun": "food"},
+        DriveKind.THIRST: {"state": "thirst", "resource": "water", "noun": "water"},
+        DriveKind.AFFILIATION: {"state": "affiliation", "resource": "companionship", "noun": "companionship"},
     },
 }
 
@@ -64,5 +64,15 @@ def state_noun(kind: DriveKind, name: str = DEFAULT_VOCABULARY) -> str:
 
 
 def resource_label(kind: DriveKind, name: str = DEFAULT_VOCABULARY) -> str:
-    """The word for the thing consumed to relieve this drive."""
+    """The word for the thing consumed to relieve this drive (with article), for
+    perceived observations: 'an energy source' / 'food'."""
     return _vocab(name)[kind]["resource"]
+
+
+def resource_noun(kind: DriveKind, name: str = DEFAULT_VOCABULARY) -> str:
+    """A compact, article-less noun for the resource, for factual outcome/memory
+    strings that reach the reflection prompt: 'energy' / 'food'. Routing these
+    through the vocabulary is what closes the leak the action-prompt-only control
+    missed — otherwise the neutral arm still says 'consumed hunger resource' and
+    'the hunger resource ran out' at reflection time."""
+    return _vocab(name)[kind]["noun"]

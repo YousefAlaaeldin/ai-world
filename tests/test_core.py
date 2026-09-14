@@ -196,7 +196,10 @@ def test_consume_picks_most_urgent_matching_resource(tmp_path):
     world = World(["loc"], resources, [agent], logger)
     outcome = world.resolve_action(agent, "consume")
     logger.close()
-    assert "thirst" in outcome
+    # Neutral default vocabulary: THIRST renders as "upkeep", HUNGER as "energy".
+    # Asserting the thirst resource was chosen (not hunger) despite hunger being
+    # listed first -- the original intent, just vocabulary-routed.
+    assert "upkeep" in outcome and "energy" not in outcome
 
 
 def test_talk_exchanges_self_model_content(tmp_path):
@@ -248,7 +251,11 @@ def test_crisis_triggers_immediate_reflection(tmp_path):
     logger.close()
 
     assert calls == [(1, "crisis")]
-    assert any("nearly died from hunger" in m for m in agent.long_term_memory)
+    # Default vocabulary is neutral, so the memory reads "energy deficit", not
+    # "hunger" -- the crisis memory is vocabulary-routed like every other
+    # model-facing string.
+    assert any("nearly died from energy deficit" in m for m in agent.long_term_memory)
+    assert not any("hunger" in m for m in agent.long_term_memory)
 
 
 def test_immortal_crisis_memory_avoids_death_framing(tmp_path):
@@ -384,6 +391,51 @@ def test_biological_vocabulary_restores_concrete_terms(tmp_path):
     # no-op and comparing the two arms proves nothing.
     text = _assemble_action_prompt("biological", tmp_path).lower()
     assert "food" in text and ("hunger" in text or "bodily" in text)
+
+
+def test_consume_outcome_and_memory_are_vocabulary_routed(tmp_path):
+    # The leak the action-prompt-only test missed: the consume OUTCOME and the
+    # depletion MEMORY both reach the reflection prompt via recent_memories, so
+    # under the neutral arm they must not say "hunger"/"food" either.
+    resources = [ResourceNode("loc", DriveKind.HUNGER, quantity=1)]
+    agent = Agent("a0", "loc", DriveSystem(vocabulary="neutral"), SelfModelHistory("a0"))
+    logger = RunLogger("test_vocab_mem", root=str(tmp_path))
+    world = World(["loc"], resources, [agent], logger, vocabulary="neutral")
+    outcome = world.resolve_action(agent, "consume")  # depletes the only unit
+    logger.close()
+    text = (outcome + " " + " ".join(agent.long_term_memory)).lower()
+    assert "hunger" not in text and "food" not in text
+    assert "energy" in outcome  # positively rendered in the neutral noun
+
+
+def test_deprimed_prompt_omits_directive_and_identity(tmp_path):
+    # The de-primed baseline arm: no "survive/purpose", no self-description fed
+    # back. The assembled prompt must contain none of that priming.
+    agent = Agent("a0", "loc", DriveSystem(vocabulary="neutral"), SelfModelHistory("a0"))
+    logger = RunLogger("test_deprimed", root=str(tmp_path))
+    world = World(["loc"], [], [agent], logger, vocabulary="neutral")
+    perceived = render_perceived(world.observations_for(agent),
+                                 agent.drives.salience_biases(), top_k=6)
+    system = _action_system_prompt("neutral", directive=None, show_self_model=False)
+    prompt = _build_action_prompt(agent, perceived, world, show_self_model=False)
+    logger.close()
+    text = (system + " " + prompt).lower()
+    for banned in ("purpose", "survive", "self-description", "who i am", "what matters"):
+        assert banned not in text, f"de-primed prompt still contains '{banned}'"
+
+
+def test_primed_prompt_still_carries_directive_and_self_model(tmp_path):
+    # The default (primed) arm must be unchanged -- directive + self-model present.
+    agent = Agent("a0", "loc", DriveSystem(vocabulary="neutral"), SelfModelHistory("a0"))
+    logger = RunLogger("test_primed", root=str(tmp_path))
+    world = World(["loc"], [], [agent], logger, vocabulary="neutral")
+    perceived = render_perceived(world.observations_for(agent),
+                                 agent.drives.salience_biases(), top_k=6)
+    system = _action_system_prompt("neutral")  # defaults: primed, self-model shown
+    prompt = _build_action_prompt(agent, perceived, world)  # default show_self_model
+    logger.close()
+    assert "Survive and find your purpose" in system
+    assert "Who I am:" in prompt
 
 
 def test_vocabulary_arms_differ_only_in_nouns():

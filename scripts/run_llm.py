@@ -22,7 +22,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from aiworld.drives import DriveSystem  # noqa: E402
-from aiworld.self_model import SelfModelHistory  # noqa: E402
+from aiworld.self_model import SelfModelHistory, SHARED_DIRECTIVE  # noqa: E402
 from aiworld.logging_schema import RunLogger  # noqa: E402
 from aiworld.sim.world import World, Agent, agent_recent_memories  # noqa: E402
 from aiworld.llm_client import LLMClient, config_from_env  # noqa: E402
@@ -34,7 +34,8 @@ from aiworld.config import (  # noqa: E402
     adjacency_from_config)
 
 
-def build_world(cfg, run_id, n_agents, seed, mortality, model_name, vocabulary="neutral"):
+def build_world(cfg, run_id, n_agents, seed, mortality, model_name, vocabulary="neutral",
+                condition=None):
     rng = random.Random(seed)
     locations = cfg["world"]["locations"]
     resources = resources_from_config(cfg)
@@ -48,11 +49,16 @@ def build_world(cfg, run_id, n_agents, seed, mortality, model_name, vocabulary="
         for i in range(n_agents)
     ]
     logger = RunLogger(run_id)
-    logger.log_meta({
+    meta = {
         "run_id": run_id, "n_agents": n_agents, "seed": seed,
         "mortality": mortality, "policy": "llm", "model": model_name,
         "vocabulary": vocabulary,
-    })
+    }
+    if condition:
+        # Record the condition arm so runs are self-describing (which arm of the
+        # matrix in docs/REDESIGN_PLAN.md this is).
+        meta.update(condition)
+    logger.log_meta(meta)
     return World(locations, resources, agents, logger, rng=rng, mortality=mortality,
                 adjacency=adjacency, vocabulary=vocabulary)
 
@@ -84,23 +90,38 @@ def main():
                   or exp_cfg["world"].get("vocabulary", "neutral"))
     mortality = exp_cfg["world"]["mortality"] and not args.immortal
 
+    # Condition arm (docs/REDESIGN_PLAN.md). Defaults reproduce the original primed
+    # setup: self-model fed back, "survive/find your purpose" directive, reflection on.
+    agents_cfg = exp_cfg.get("agents", {})
+    show_self_model = agents_cfg.get("show_self_model", True)
+    directive = agents_cfg.get("directive", SHARED_DIRECTIVE)  # YAML null -> de-primed
+    reflection_enabled = exp_cfg["reflection"].get("enabled", True)
+
     cfg = config_from_env()
     client = LLMClient(cfg)
     print(f"Using model '{cfg.model}' at {cfg.base_url} (provider={cfg.provider})")
 
+    condition = {"show_self_model": show_self_model, "directive": directive,
+                 "reflection_enabled": reflection_enabled,
+                 "reflection_prompt": prompt_choice if reflection_enabled else None}
     world = build_world(exp_cfg, args.run_id, n_agents, args.seed,
-                        mortality=mortality, model_name=cfg.model, vocabulary=vocabulary)
-    policy = make_llm_policy(client, vocabulary=vocabulary)
+                        mortality=mortality, model_name=cfg.model, vocabulary=vocabulary,
+                        condition=condition)
+    policy = make_llm_policy(client, vocabulary=vocabulary, directive=directive,
+                             show_self_model=show_self_model)
 
-    history_by_agent = {a.agent_id: a.history for a in world.agents}
-    template = FLAT_REVISION_PROMPT if prompt_choice == "flat" else LEADING_REVISION_PROMPT
-    reflect = make_reflect_fn(
-        model_call=lambda p: client.complete(p),
-        history_by_agent=history_by_agent,
-        logger=world.logger,
-        prompt_template=template,
-        recent_memories_fn=agent_recent_memories,
-    )
+    reflect = None
+    if reflection_enabled:
+        history_by_agent = {a.agent_id: a.history for a in world.agents}
+        template = (FLAT_REVISION_PROMPT if prompt_choice == "flat"
+                    else LEADING_REVISION_PROMPT)
+        reflect = make_reflect_fn(
+            model_call=lambda p: client.complete(p),
+            history_by_agent=history_by_agent,
+            logger=world.logger,
+            prompt_template=template,
+            recent_memories_fn=agent_recent_memories,
+        )
 
     # Log every agent's identical starting self-model as version 0.
     for a in world.agents:

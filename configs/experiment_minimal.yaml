@@ -36,6 +36,13 @@ world:
 agents:
   count: 6
   # Everyone starts IDENTICAL. No names, no personas, no goals beyond the directive.
+  # Condition arm (docs/REDESIGN_PLAN.md). Defaults = the original PRIMED setup
+  # (positive control). For the de-primed OPEN-WORLD BASELINE, set:
+  #   show_self_model: false   # don't feed the self-model back into decisions
+  #   directive: null          # no "survive and find your purpose"
+  # and reflection.enabled: false below.
+  show_self_model: true
+  directive: "Survive and find your purpose."
 
 drives:
   hunger:      {decay_per_tick: 0.05, replenish_amount: 0.6, lethal: true}
@@ -44,6 +51,13 @@ drives:
 
 reflection:
   every_n_ticks: 5
+  # enabled: false turns OFF self-authoring entirely (the de-primed baseline —
+  # agents act, but never rewrite/see a self-model). Default true = self-narrative
+  # arm. NOTE: with reflection off the self-model never advances past v0, so the
+  # trajectory/cluster metrics have nothing to analyze until behavioral metrics
+  # land (Tranche 3, docs/REDESIGN_PLAN.md) — don't run a baseline expecting
+  # results yet.
+  enabled: true
   # Which revision prompt to use. 'flat' is the non-leading control (default).
   # 'leading' exists ONLY to run the confound check — never as the main condition.
   prompt: flat        # flat | leading
