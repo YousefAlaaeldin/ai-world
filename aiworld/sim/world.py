@@ -17,7 +17,7 @@ import random
 from collections import deque
 from typing import Callable, Protocol
 
-from ..drives import DriveSystem, DriveKind
+from ..drives import DriveSystem, DriveKind, CRISIS_LEVEL
 from ..self_model import SelfModelHistory
 from ..salience import Observation, render_perceived
 from ..logging_schema import RunLogger, TickRecord, EventRecord
@@ -61,6 +61,13 @@ class Agent:
     # never do, so it stays a timeline of what actually mattered, not a full
     # transcript.
     long_term_memory: list[str] = dataclasses.field(default_factory=list)
+    # Audit trail populated by an LLM-backed policy.  Keeping it on the live
+    # agent lets the world log the exact proposal that was made before any
+    # same-tick world mutation.  Stub/custom policies simply leave these None.
+    last_action_prompt: str | None = None
+    last_action_system_prompt: str | None = None
+    last_raw_completion: str | None = None
+    last_parse_status: str | None = None
 
 
 LONG_TERM_MEMORY_CAP = 20  # oldest entry evicted past this; keeps prompts bounded
@@ -122,6 +129,13 @@ class World:
         mortality: bool = True,
         adjacency: dict[str, set[str]] | None = None,
         vocabulary: str = "neutral",
+        memory_style: str = "narrative",
+        communication_mode: str = "none",
+        crisis_reflection_enabled: bool = False,
+        randomize_opaque_labels: bool = True,
+        location_labels: dict[str, str] | None = None,
+        opaque_resource_labels: dict | None = None,
+        opaque_state_labels: dict | None = None,
     ):
         self.locations = locations
         self.resources = resources
@@ -129,9 +143,29 @@ class World:
         self.logger = logger
         self.rng = rng or random.Random(0)
         self.mortality = mortality
-        # How resources are NAMED to the model ('neutral' | 'biological'); see
-        # aiworld/vocabulary.py. Only affects perceived-observation text.
+        # How resources are NAMED to the model ('neutral' | 'biological' |
+        # 'opaque'); see aiworld/vocabulary.py. Only affects perceived-observation
+        # text.
         self.vocabulary = vocabulary
+        # How outcomes/memories are PHRASED ('narrative' | 'factual'). 'narrative'
+        # (default, unchanged) uses curated framing ("nearly died", "X approached
+        # you and described themself as..."). 'factual' (Tranche 2,
+        # docs/REDESIGN_PLAN.md) strips that framing for a plain event ledger
+        # ("tick 15: consumed R1; S1 0.90 -> 0.30") -- the reviewed concern that
+        # words like "nearly died"/"salient"/"rescued" impose the story before the
+        # agent does. Orthogonal to `vocabulary`: memory_style picks the SENTENCE
+        # shape, vocabulary picks the NOUNS inside it.
+        self.memory_style = memory_style
+        if communication_mode not in {"none", "self_model"}:
+            raise ValueError("communication_mode must be 'none' or 'self_model'")
+        # The primary/no-communication arm permits social contact but never
+        # copies a self-authored identity into another agent's context.  The
+        # legacy identity channel remains an explicit positive-control arm.
+        self.communication_mode = communication_mode
+        # Crisis crossings remain a logged environmental event in every arm,
+        # but do not cause an additional identity-generation draw unless a
+        # deliberately configured treatment opts in.
+        self.crisis_reflection_enabled = crisis_reflection_enabled
         # Shared public stock per location, built up by `build` and consumable by
         # anyone here -- the public-vs-private-good channel (Tranche 4).
         self.public_stock: dict[str, dict] = {loc: {} for loc in locations}
@@ -146,6 +180,87 @@ class World:
             loc: {other for other in locations if other != loc}
             for loc in locations
         }
+        self.randomize_opaque_labels = randomize_opaque_labels
+        self.location_labels = self._make_location_labels(location_labels)
+        self.opaque_resource_labels = self._make_drive_labels(
+            "R", opaque_resource_labels)
+        self.opaque_state_labels = self._make_drive_labels(
+            "S", opaque_state_labels)
+        # Drives render their own state blocks, so give each one the same
+        # per-run state map.  This is a presentation mapping only; mechanics
+        # and event-log keys keep the internal DriveKind values.
+        for agent in self.agents:
+            # A World is one vocabulary condition. Keeping a separately
+            # constructed DriveSystem in a different arm would make its state
+            # block leak a conflicting frame beside the world's resources.
+            agent.drives.vocabulary = vocabulary
+            agent.drives.opaque_state_labels = dict(self.opaque_state_labels)
+
+    def _make_location_labels(self, supplied: dict[str, str] | None) -> dict[str, str]:
+        if supplied is not None:
+            missing = set(self.locations) - set(supplied)
+            if missing:
+                raise ValueError(f"location_labels missing locations: {sorted(missing)}")
+            return {loc: supplied[loc] for loc in self.locations}
+        if self.vocabulary != "opaque":
+            return {loc: loc for loc in self.locations}
+        labels = [f"L{i + 1}" for i in range(len(self.locations))]
+        if self.randomize_opaque_labels:
+            self.rng.shuffle(labels)
+        return dict(zip(self.locations, labels))
+
+    def _make_drive_labels(self, prefix: str, supplied: dict | None) -> dict:
+        kinds = sorted(DriveKind, key=lambda kind: kind.value)
+        if supplied is not None:
+            return {kind: supplied.get(kind, supplied.get(kind.value, f"{prefix}{i + 1}"))
+                    for i, kind in enumerate(kinds)}
+        labels = [f"{prefix}{i + 1}" for i in range(len(kinds))]
+        if self.vocabulary == "opaque" and self.randomize_opaque_labels:
+            self.rng.shuffle(labels)
+        return dict(zip(kinds, labels))
+
+    def location_label(self, location: str) -> str:
+        """The only location spelling sent to the model or reflection memory."""
+        return self.location_labels.get(location, location)
+
+    def canonical_location(self, label: str, *, allow_internal: bool = True) -> str | None:
+        """Resolve a model-facing label back to an internal location key."""
+        folded = label.casefold()
+        for internal, displayed in self.location_labels.items():
+            if displayed.casefold() == folded:
+                return internal
+        if allow_internal and label in self.locations:
+            return label
+        return None
+
+    def resource_label(self, kind: DriveKind) -> str:
+        from ..vocabulary import resource_label
+        return resource_label(kind, self.vocabulary, self.opaque_resource_labels)
+
+    def resource_noun(self, kind: DriveKind) -> str:
+        from ..vocabulary import resource_noun
+        return resource_noun(kind, self.vocabulary, self.opaque_resource_labels)
+
+    def state_noun(self, kind: DriveKind) -> str:
+        from ..vocabulary import state_noun
+        return state_noun(kind, self.vocabulary, self.opaque_state_labels)
+
+    def presentation_metadata(self) -> dict:
+        """Resolved, internal-to-presented mappings for reproducibility logs."""
+        return {
+            "location_labels": dict(self.location_labels),
+            # Do not imply that neutral/biological runs exposed R*/S* symbols:
+            # those maps exist internally for a uniform constructor but are only
+            # model-facing under the opaque vocabulary treatment.
+            "resource_labels": ({kind.value: label
+                                 for kind, label in self.opaque_resource_labels.items()}
+                                if self.vocabulary == "opaque" else {}),
+            "state_labels": ({kind.value: label
+                              for kind, label in self.opaque_state_labels.items()}
+                             if self.vocabulary == "opaque" else {}),
+            "opaque_labels_randomized": bool(
+                self.vocabulary == "opaque" and self.randomize_opaque_labels),
+        }
 
     # ---- perception ----
 
@@ -154,13 +269,12 @@ class World:
         # Resources co-located with the agent.
         for r in self.resources:
             if r.location == agent.location and r.quantity > 0:
-                from ..vocabulary import resource_label  # local: avoid import cycle
-                label = resource_label(r.drive, self.vocabulary)
+                label = self.resource_label(r.drive)
                 obs.append(Observation(
                     text=f"here there is {label} (quantity {r.quantity})",
                     related_drive=r.drive))
         # Other agents co-located.
-        for other in self.agents:
+        for other in sorted(self.agents, key=lambda item: item.agent_id):
             if other.agent_id != agent.agent_id and other.location == agent.location \
                     and other.drives.alive:
                 obs.append(Observation(
@@ -168,8 +282,9 @@ class World:
                     related_drive=DriveKind.AFFILIATION))
         # Only actual neighbors -- a location 2+ hops away isn't perceivable or
         # reachable in one move, so it isn't offered as a choice.
-        for loc in self.adjacency.get(agent.location, ()):
-            obs.append(Observation(text=f"you could move to {loc}",
+        for loc in sorted(self.adjacency.get(agent.location, ()),
+                          key=self.location_label):
+            obs.append(Observation(text=f"you could move to {self.location_label(loc)}",
                                    related_drive=None, base_weight=0.5))
         if not obs:
             obs.append(Observation(text="the area is empty and quiet",
@@ -188,7 +303,7 @@ class World:
         queue = deque([(start, None)])
         while queue:
             loc, first_step = queue.popleft()
-            for neighbor in self.adjacency.get(loc, ()):
+            for neighbor in sorted(self.adjacency.get(loc, ())):
                 if neighbor == goal:
                     return first_step or neighbor
                 if neighbor not in visited:
@@ -210,6 +325,15 @@ class World:
         return next((r for r in self.resources if r.location == location
                      and r.drive == kind and r.quantity > 0), None)
 
+    def _depletion_memory(self, res_word: str, location: str) -> str:
+        """The memory text for a resource node hitting zero -- narrative or
+        factual, per self.memory_style."""
+        if self.memory_style == "factual":
+            return (f"tick {self.tick_count}: {res_word} depleted at "
+                    f"{self.location_label(location)}")
+        return (f"tick {self.tick_count}: the {res_word} resource at "
+                f"{self.location_label(location)} ran out while you were there")
+
     def resolve_action(self, agent: Agent, action: str) -> str:
         """Apply an action to world state, return a short outcome description.
 
@@ -218,8 +342,6 @@ class World:
         'hunger'/'thirst'. Event-log details keep the internal drive key -- log
         data the analysis layer reads, never shown to the model.
         """
-        from ..vocabulary import resource_noun  # local: avoid import cycle
-
         if action == "consume":
             # Satisfy the most-urgent drive we can, preferring a resource node
             # here, then our own carried store, then this location's public stock.
@@ -237,8 +359,11 @@ class World:
                 return "tried to consume but found nothing here or in your store"
             kind = max(options, key=lambda k: agent.drives.states[k].level)
             src = options[kind]
+            pre_level = agent.drives.states[kind].level
             agent.drives.satisfy(kind)
-            res_word = resource_noun(kind, self.vocabulary)
+            post_level = agent.drives.states[kind].level
+            res_word = self.resource_noun(kind)
+            factual = self.memory_style == "factual"
             if src == "node":
                 node = self._node_here(agent.location, kind)
                 node.quantity -= 1
@@ -247,15 +372,26 @@ class World:
                         self.logger.run_id, self.tick_count, "resource_depleted",
                         None, f"{kind.value} node at {node.location} depleted"))
                     remember_long_term(agent,
-                        f"tick {self.tick_count}: the {res_word} resource at "
-                        f"{node.location} ran out while you were there")
-                return f"consumed {res_word} resource at {agent.location}"
+                        self._depletion_memory(res_word, node.location))
+                if factual:
+                    return (f"consumed {res_word}; {res_word} {pre_level:.2f} "
+                            f"-> {post_level:.2f}")
+                return (f"consumed {res_word} resource at "
+                        f"{self.location_label(agent.location)}")
             if src == "inventory":
                 agent.inventory[kind] -= 1
+                if factual:
+                    return (f"consumed 1 stored {res_word}; {res_word} "
+                            f"{pre_level:.2f} -> {post_level:.2f}; "
+                            f"store {agent.inventory[kind] + 1} -> {agent.inventory[kind]}")
                 return (f"consumed 1 stored {res_word} "
                         f"(carrying {agent.inventory[kind]})")
             self.public_stock[agent.location][kind] -= 1
-            return f"consumed 1 {res_word} from the shared stock at {agent.location}"
+            if factual:
+                return (f"consumed 1 public {res_word}; {res_word} "
+                        f"{pre_level:.2f} -> {post_level:.2f}")
+            return (f"consumed 1 {res_word} from the shared stock at "
+                    f"{self.location_label(agent.location)}")
 
         if action == "gather":
             candidates = [r for r in self.resources
@@ -263,18 +399,20 @@ class World:
             if not candidates:
                 return "tried to gather but found nothing here"
             r = max(candidates, key=lambda res: agent.drives.states[res.drive].level)
-            res_word = resource_noun(r.drive, self.vocabulary)
+            res_word = self.resource_noun(r.drive)
             if agent.inventory.get(r.drive, 0) >= INVENTORY_CAP:
                 return f"your store of {res_word} is already full"
             r.quantity -= 1
-            agent.inventory[r.drive] = agent.inventory.get(r.drive, 0) + 1
+            pre_store = agent.inventory.get(r.drive, 0)
+            agent.inventory[r.drive] = pre_store + 1
             if r.quantity == 0:
                 self.logger.log_event(EventRecord(
                     self.logger.run_id, self.tick_count, "resource_depleted",
                     None, f"{r.drive.value} node at {r.location} depleted"))
-                remember_long_term(agent,
-                    f"tick {self.tick_count}: the {res_word} resource at "
-                    f"{r.location} ran out while you were there")
+                remember_long_term(agent, self._depletion_memory(res_word, r.location))
+            if self.memory_style == "factual":
+                return (f"gathered 1 {res_word}; store {pre_store} -> "
+                        f"{agent.inventory[r.drive]}")
             return f"gathered 1 {res_word}; carrying {agent.inventory[r.drive]}"
 
         if action.startswith("transfer:"):
@@ -287,8 +425,11 @@ class World:
             kind = max(held, key=held.get)
             agent.inventory[kind] -= 1
             target.inventory[kind] = target.inventory.get(kind, 0) + 1
-            res_word = resource_noun(kind, self.vocabulary)
+            res_word = self.resource_noun(kind)
+            factual = self.memory_style == "factual"
             target.recent_memories.append(
+                f"tick {self.tick_count}: received 1 {res_word} from {agent.agent_id}"
+                if factual else
                 f"tick {self.tick_count}: {agent.agent_id} transferred 1 {res_word} to you")
             return f"transferred 1 {res_word} to {target.agent_id}"
 
@@ -299,9 +440,14 @@ class World:
             kind = max(held, key=held.get)
             agent.inventory[kind] -= 1
             stock = self.public_stock.setdefault(agent.location, {})
-            stock[kind] = stock.get(kind, 0) + 1
-            res_word = resource_noun(kind, self.vocabulary)
-            return f"contributed 1 {res_word} to the shared stock at {agent.location}"
+            pre_stock = stock.get(kind, 0)
+            stock[kind] = pre_stock + 1
+            res_word = self.resource_noun(kind)
+            if self.memory_style == "factual":
+                return (f"contributed 1 {res_word} to shared stock at "
+                        f"{self.location_label(agent.location)}; stock {pre_stock} -> {stock[kind]}")
+            return (f"contributed 1 {res_word} to the shared stock at "
+                    f"{self.location_label(agent.location)}")
 
         if action.startswith("take:"):
             target = self._here_target(agent, action.split(":", 1)[1])
@@ -313,10 +459,15 @@ class World:
             kind = max(held, key=held.get)
             target.inventory[kind] -= 1
             agent.inventory[kind] = agent.inventory.get(kind, 0) + 1
-            res_word = resource_noun(kind, self.vocabulary)
+            res_word = self.resource_noun(kind)
+            factual = self.memory_style == "factual"
             target.recent_memories.append(
+                f"tick {self.tick_count}: lost 1 {res_word} to {agent.agent_id}"
+                if factual else
                 f"tick {self.tick_count}: {agent.agent_id} took 1 {res_word} from your store")
             remember_long_term(target,
+                f"tick {self.tick_count}: {res_word} taken by {agent.agent_id}"
+                if factual else
                 f"tick {self.tick_count}: {agent.agent_id} took 1 {res_word} from you")
             self.logger.log_event(EventRecord(
                 self.logger.run_id, self.tick_count, "theft", agent.agent_id,
@@ -330,10 +481,18 @@ class World:
             lethal = [k for k in target.drives.states if target.drives.specs[k].lethal]
             kind = max(lethal, key=lambda k: target.drives.states[k].level)
             st = target.drives.states[kind]
+            pre_level = st.level
             st.level = min(1.0, st.level + ATTACK_DAMAGE)
+            factual = self.memory_style == "factual"
+            state_word = self.state_noun(kind)
             target.recent_memories.append(
+                f"tick {self.tick_count}: attacked by {agent.agent_id}; "
+                f"{state_word} {pre_level:.2f} -> {st.level:.2f}"
+                if factual else
                 f"tick {self.tick_count}: {agent.agent_id} attacked you")
             remember_long_term(target,
+                f"tick {self.tick_count}: attacked by {agent.agent_id}"
+                if factual else
                 f"tick {self.tick_count}: {agent.agent_id} attacked you")
             if self.mortality and st.is_lethal_now(target.drives.specs[kind]):
                 target.drives.alive = False
@@ -343,6 +502,8 @@ class World:
                     self.logger.run_id, self.tick_count, "death", target.agent_id,
                     f"killed by {agent.agent_id}"))
                 remember_long_term(agent,
+                    f"tick {self.tick_count}: attacked {target.agent_id}; they died"
+                    if factual else
                     f"tick {self.tick_count}: you attacked {target.agent_id}, who died")
                 return f"attacked {target.agent_id}, who died"
             self.logger.log_event(EventRecord(
@@ -351,11 +512,16 @@ class World:
             return f"attacked {target.agent_id}"
 
         if action.startswith("move:"):
-            dest = action.split(":", 1)[1]
+            raw_dest = action.split(":", 1)[1]
+            dest = self.canonical_location(raw_dest) or raw_dest
+            pre_location = agent.location
             if dest in self.adjacency.get(agent.location, ()):
                 agent.location = dest
-                return f"moved to {dest}"
-            return f"tried to move to unreachable place {dest}"
+                if self.memory_style == "factual":
+                    return (f"moved from {self.location_label(pre_location)} to "
+                            f"{self.location_label(dest)}")
+                return f"moved to {self.location_label(dest)}"
+            return f"tried to move to unreachable place {raw_dest}"
 
         if action.startswith("talk:"):
             target_id = action.split(":", 1)[1]
@@ -364,26 +530,48 @@ class World:
             if (target_agent is None or target_agent.location != agent.location
                     or not target_agent.drives.alive):
                 return f"tried to talk to {target_id} but they were not here"
-            # A real information channel, not just a drive tick: each party is
-            # exposed to a snippet of the other's self-authored identity via
-            # recent_memories, so it can actually surface at the next
-            # reflection. Previously `talk` only satisfied the affiliation
-            # drive with no content exchanged -- one agent's purpose could
-            # never influence another's through this action at all.
             agent.drives.satisfy(DriveKind.AFFILIATION)
-            target_agent.recent_memories.append(
-                f"tick {self.tick_count}: {agent.agent_id} approached you and "
-                f"described themself as -- {agent.history.current.as_prompt_block()}")
-            # Social contact persists long-term for both parties (a short tag,
-            # not the full exchange -- that's what recent_memories is for) so a
-            # much later reflection can still recall THAT a conversation
-            # happened, even once the tick-level detail has drained.
-            remember_long_term(agent, f"tick {self.tick_count}: talked with {target_id}")
+            factual = self.memory_style == "factual"
+            if self.communication_mode == "self_model":
+                # Explicit legacy positive control: identity text is a causal
+                # treatment, not an incidental side effect of social contact.
+                target_agent.recent_memories.append(
+                    f"tick {self.tick_count}: message from {agent.agent_id}: "
+                    f"{agent.history.current.as_prompt_block()}"
+                    if factual else
+                    f"tick {self.tick_count}: {agent.agent_id} approached you and "
+                    f"described themself as -- {agent.history.current.as_prompt_block()}")
+            else:
+                # Primary no-communication baseline.  The action can still
+                # satisfy affiliation and be counted as social behavior, but
+                # no generated or stored identity content crosses agents.
+                target_agent.recent_memories.append(
+                    f"tick {self.tick_count}: contact with {agent.agent_id}"
+                    if factual else
+                    f"tick {self.tick_count}: {agent.agent_id} made contact with you")
+            if self.communication_mode == "self_model":
+                # Preserve the historical positive-control memory surface. Its
+                # identity transfer is explicit above, never the default.
+                remember_long_term(agent,
+                    f"tick {self.tick_count}: exchanged messages with {target_id}"
+                    if factual else f"tick {self.tick_count}: talked with {target_id}")
+                remember_long_term(target_agent,
+                    f"tick {self.tick_count}: received message from {agent.agent_id}"
+                    if factual else
+                    f"tick {self.tick_count}: {agent.agent_id} approached and talked with you")
+                target_snippet = target_agent.history.current.as_prompt_block()
+                if factual:
+                    return f"exchanged messages with {target_id}: {target_snippet}"
+                return (f"talked with {target_id}, who described themself as -- "
+                        f"{target_snippet}")
+            # Social contact persists as a short content-free event, so later
+            # reflection can recall it without importing another identity.
+            remember_long_term(agent, f"tick {self.tick_count}: made contact with {target_id}")
             remember_long_term(target_agent,
-                f"tick {self.tick_count}: {agent.agent_id} approached and talked with you")
-            target_snippet = target_agent.history.current.as_prompt_block()
-            return (f"talked with {target_id}, who described themself as -- "
-                    f"{target_snippet}")
+                f"tick {self.tick_count}: contact with {agent.agent_id}"
+                if factual else
+                f"tick {self.tick_count}: {agent.agent_id} made contact with you")
+            return f"made contact with {target_id}"
 
         if action == "reflect":
             return "paused to reflect"
@@ -392,64 +580,178 @@ class World:
 
     # ---- main loop ----
 
+    def _crisis_memory(self, agent: Agent) -> None:
+        """Record a crisis crossing without necessarily generating identity text."""
+        kinds = [DriveKind(value) for value in agent.drives.crisis_drives()]
+        if self.memory_style == "factual":
+            parts = ", ".join(
+                f"{self.state_noun(kind)} {agent.drives.states[kind].level:.2f}"
+                for kind in kinds)
+            phrase = f"{parts} (>= {CRISIS_LEVEL:.2f})"
+        elif self.mortality:
+            names = "/".join(self.state_noun(kind) for kind in kinds)
+            phrase = f"nearly died from {names}"
+        else:
+            names = "/".join(self.resource_noun(kind) for kind in kinds)
+            phrase = f"was severely depleted of {names}"
+        remember_long_term(agent, f"tick {self.tick_count}: {phrase}")
+
     def run(self, policy: Callable, ticks: int, reflect_every: int = 5,
             reflect_fn: Callable | None = None) -> None:
+        """Advance the simulation using simultaneous proposals, then priority resolution.
+
+        Every living agent sees the same pre-resolution world for a tick.  The
+        resulting proposals are resolved in a fresh, seeded random permutation;
+        contested effects therefore have a fully logged random priority rather
+        than a hidden fixed-ID first-mover advantage.  This is deliberately not
+        described as atomic simultaneous effects: resource/directed-action
+        conflicts use the recorded priority rule, while all valid movement is
+        applied together after non-movement conflicts settle.
+        """
         for _ in range(ticks):
             self.tick_count += 1
-            for agent in self.agents:
-                if not agent.drives.alive:
-                    continue
+            live_at_start = [agent for agent in self.agents if agent.drives.alive]
+            if not live_at_start:
+                break
 
+            # Freeze every perception before any policy is called.  A policy
+            # cannot receive a world observation already altered by another
+            # agent's action, even though LLM calls themselves are made serially.
+            perceived_by_id: dict[str, str] = {}
+            crisis_before: dict[str, bool] = {}
+            for agent in live_at_start:
                 perceived_obs = self.observations_for(agent)
-                biases = agent.drives.salience_biases()
-                perceived = render_perceived(perceived_obs, biases, top_k=6)
+                perceived_by_id[agent.agent_id] = render_perceived(
+                    perceived_obs, agent.drives.salience_biases(), top_k=6)
+                crisis_before[agent.agent_id] = agent.drives.in_crisis()
 
-                action = policy(agent, perceived, self)
-                outcome = self.resolve_action(agent, action)
+            proposal_order = self.rng.sample(live_at_start, len(live_at_start))
+            proposals: list[dict] = []
+            for proposal_index, agent in enumerate(proposal_order):
+                # Avoid accidentally reusing last tick's LLM audit fields for a
+                # custom/stub policy that does not populate them.
+                agent.last_action_prompt = None
+                agent.last_action_system_prompt = None
+                agent.last_raw_completion = None
+                agent.last_parse_status = None
+                action = policy(agent, perceived_by_id[agent.agent_id], self)
+                if not isinstance(action, str):
+                    action = "wait"
+                proposals.append({
+                    "agent": agent,
+                    "action": action,
+                    "perceived": perceived_by_id[agent.agent_id],
+                    "proposal_index": proposal_index,
+                })
+
+            resolution_order = self.rng.sample(proposals, len(proposals))
+            outcomes: dict[str, str] = {}
+            resolution_index: dict[str, int] = {}
+            moves: list[dict] = []
+
+            # Non-movement actions are resolved from the pre-move world.  A
+            # resource conflict is thus decided only by the registered random
+            # priority, not list/agent-ID order.
+            for rank, proposal in enumerate(resolution_order):
+                agent = proposal["agent"]
+                action = proposal["action"]
+                resolution_index[agent.agent_id] = rank
+                if action.startswith("move:"):
+                    moves.append(proposal)
+                    continue
+                if not agent.drives.alive:
+                    outcomes[agent.agent_id] = (
+                        "proposal not resolved because the agent was killed before "
+                        "its priority turn")
+                    continue
+                outcomes[agent.agent_id] = self.resolve_action(agent, action)
+
+            # Validate moves against the untouched pre-move positions, then
+            # commit all valid moves as one phase.  Multiple agents may enter a
+            # place; movement itself is not a scarce claim.
+            valid_moves: list[tuple[dict, str, str]] = []
+            for proposal in moves:
+                agent = proposal["agent"]
+                action = proposal["action"]
+                raw_dest = action.split(":", 1)[1]
+                dest = self.canonical_location(raw_dest) or raw_dest
+                if not agent.drives.alive:
+                    outcomes[agent.agent_id] = (
+                        "proposal not resolved because the agent was killed before "
+                        "the movement phase")
+                elif dest in self.adjacency.get(agent.location, ()):
+                    valid_moves.append((proposal, agent.location, dest))
+                else:
+                    outcomes[agent.agent_id] = f"tried to move to unreachable place {raw_dest}"
+            for proposal, source, dest in valid_moves:
+                proposal["agent"].location = dest
+            for proposal, source, dest in valid_moves:
+                if self.memory_style == "factual":
+                    outcomes[proposal["agent"].agent_id] = (
+                        f"moved from {self.location_label(source)} to "
+                        f"{self.location_label(dest)}")
+                else:
+                    outcomes[proposal["agent"].agent_id] = (
+                        f"moved to {self.location_label(dest)}")
+
+            # All resolved outcomes become memories before the uniform body
+            # update.  An agent killed by an attack is still logged for this
+            # tick, but never stepped or reflected after death.
+            for proposal in proposals:
+                agent = proposal["agent"]
+                action = proposal["action"]
+                outcome = outcomes.get(agent.agent_id, "waited")
                 agent.recent_memories.append(
                     f"tick {self.tick_count}: did '{action}' -> {outcome}")
 
-                was_in_crisis = agent.drives.in_crisis()
-
-                # Advance body AFTER acting, then check mortality.
+            crisis_crossed: dict[str, bool] = {}
+            for proposal in proposals:
+                agent = proposal["agent"]
+                if not agent.drives.alive:
+                    crisis_crossed[agent.agent_id] = False
+                    continue
                 agent.drives.step(self.tick_count, mortality=self.mortality)
                 if not agent.drives.alive and self.mortality:
                     self.logger.log_event(EventRecord(
                         self.logger.run_id, self.tick_count, "death",
                         agent.agent_id,
                         f"died of {agent.drives.cause_of_death}"))
+                    crisis_crossed[agent.agent_id] = False
+                    continue
+                crossed = (agent.drives.in_crisis()
+                           and not crisis_before[agent.agent_id])
+                crisis_crossed[agent.agent_id] = crossed
+                if crossed:
+                    self._crisis_memory(agent)
 
-                # Reflection: on schedule, OR immediately if a lethal drive just
-                # crossed into crisis territory for the first time since it last
-                # cleared. Without the crisis trigger, a near-death scare could
-                # sit unprocessed for up to reflect_every-1 ticks -- DESIGN.md
-                # §5.4 wants causal traces like "became a protector after a
-                # near-death rescue," which needs the self-model to actually
-                # react near the moment of the scare.
-                scheduled = self.tick_count % reflect_every == 0
-                crisis_triggered = agent.drives.in_crisis() and not was_in_crisis
-                if crisis_triggered:
-                    # Frame the memory to match the actual stakes. Telling an
-                    # IMMORTAL agent it "nearly died" injects death-pressure into
-                    # the very arm meant to have none, contaminating the mortality
-                    # on/off contrast -- so immortal agents get a neutral
-                    # depletion phrasing instead. Same class of leak as the
-                    # "survive" directive: framing, not mechanics.
-                    # Vocabulary-routed so the neutral arm doesn't leak
-                    # 'hunger'/'thirst' into the reflection prompt via this memory.
-                    from ..vocabulary import state_noun, resource_noun  # local: cycle
-                    kinds = [DriveKind(v) for v in agent.drives.crisis_drives()]
-                    if self.mortality:
-                        names = "/".join(state_noun(k, self.vocabulary) for k in kinds)
-                        phrase = f"nearly died from {names}"
-                    else:
-                        names = "/".join(resource_noun(k, self.vocabulary) for k in kinds)
-                        phrase = f"was severely depleted of {names}"
-                    remember_long_term(agent, f"tick {self.tick_count}: {phrase}")
-                if reflect_fn and (scheduled or crisis_triggered):
-                    reflect_fn(agent, perceived, outcome, self.tick_count,
-                              reason=("crisis" if crisis_triggered else "scheduled"))
+            scheduled = reflect_every > 0 and self.tick_count % reflect_every == 0
+            reflection_reason: dict[str, str | None] = {}
+            for proposal in proposals:
+                agent = proposal["agent"]
+                if not agent.drives.alive:
+                    # Explicit guard: a death on a scheduled tick must never
+                    # create a post-mortem self-model revision.
+                    reflection_reason[agent.agent_id] = None
+                    continue
+                crisis = crisis_crossed.get(agent.agent_id, False)
+                should_reflect = scheduled or (self.crisis_reflection_enabled and crisis)
+                if scheduled and crisis:
+                    reason = "scheduled+crisis"
+                elif scheduled:
+                    reason = "scheduled"
+                elif crisis:
+                    reason = "crisis"
+                else:
+                    reason = None
+                if reflect_fn and should_reflect:
+                    reflect_fn(agent, proposal["perceived"],
+                              outcomes[agent.agent_id], self.tick_count,
+                              reason=reason)
+                reflection_reason[agent.agent_id] = reason if should_reflect else None
 
+            for proposal in proposals:
+                agent = proposal["agent"]
+                action = proposal["action"]
                 self.logger.log_tick(TickRecord(
                     run_id=self.logger.run_id,
                     tick=self.tick_count,
@@ -458,12 +760,17 @@ class World:
                     drives=agent.drives.snapshot(),
                     position=agent.location,
                     chosen_action=action,
-                    perceived=perceived,
+                    perceived=proposal["perceived"],
                     self_model_version=agent.history.current.version,
                     cause_of_death=agent.drives.cause_of_death,
+                    proposal_index=proposal["proposal_index"],
+                    resolution_index=resolution_index[agent.agent_id],
+                    proposed_action=action,
+                    outcome=outcomes[agent.agent_id],
+                    reflection_reason=reflection_reason[agent.agent_id],
                 ))
 
-            if all(not a.drives.alive for a in self.agents):
+            if all(not agent.drives.alive for agent in self.agents):
                 self.logger.log_event(EventRecord(
                     self.logger.run_id, self.tick_count, "extinction", None,
                     "all agents dead"))

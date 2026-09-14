@@ -101,10 +101,9 @@ def test_full_llm_pipeline_runs_and_diverges(tmp_path):
     assert len(lines) > len(world.agents)  # v0 for each + revisions
 
 
-def test_parse_action_rejects_illegal():
+def test_parse_action_rejects_illegal(tmp_path):
     # Minimal world with one agent to validate parsing guards.
-    logger_dir = "/tmp/aiworld_parsetest"
-    logger = RunLogger("parsetest", root=logger_dir)
+    logger = RunLogger("parsetest", root=str(tmp_path))
     world = _build_world(logger)
     agent = world.agents[0]
     # A hallucinated place should fall back to wait.

@@ -51,8 +51,8 @@ LEADING_REVISION_PROMPT = (
 )
 
 
-def parse_revision(text: str, previous: SelfModel, tick: int,
-                   triggering_event: str) -> SelfModel:
+def parse_revision_diagnostic(text: str, previous: SelfModel, tick: int,
+                              triggering_event: str) -> tuple[SelfModel, str]:
     """Parse the model's three-line response into a new SelfModel version.
 
     Robust to extra whitespace / preamble. Falls back to the previous field value if
@@ -61,17 +61,28 @@ def parse_revision(text: str, previous: SelfModel, tick: int,
     who = previous.who_i_am
     matters = previous.what_matters
     want = previous.what_i_want_now
+    found = set()
     for line in text.splitlines():
         low = line.lower().strip()
         if low.startswith("who i am:"):
             who = line.split(":", 1)[1].strip()
+            found.add("who")
         elif low.startswith("what matters"):
             matters = line.split(":", 1)[1].strip()
+            found.add("matters")
         elif low.startswith("what i want"):
             want = line.split(":", 1)[1].strip()
+            found.add("want")
+    status = "ok" if len(found) == 3 else "partial_format" if found else "invalid_format"
     return previous.revise(
         who_i_am=who, what_matters=matters, what_i_want_now=want,
-        tick=tick, triggering_event=triggering_event)
+        tick=tick, triggering_event=triggering_event), status
+
+
+def parse_revision(text: str, previous: SelfModel, tick: int,
+                   triggering_event: str) -> SelfModel:
+    """Backward-compatible revision-only wrapper around diagnostic parsing."""
+    return parse_revision_diagnostic(text, previous, tick, triggering_event)[0]
 
 
 def make_reflect_fn(
@@ -80,6 +91,7 @@ def make_reflect_fn(
     logger,
     prompt_template: str = FLAT_REVISION_PROMPT,
     recent_memories_fn: Callable | None = None,
+    completion_observer: Callable[[dict], None] | None = None,
 ):
     """Build a reflect_fn compatible with World.run(...).
 
@@ -107,9 +119,20 @@ def make_reflect_fn(
         # `reason` ("scheduled" | "crisis", see World.run) rides along in the
         # causal-trace field so an event-triggered reflection is distinguishable
         # from a routine periodic one when reading self_models.jsonl later.
-        new_model = parse_revision(
+        new_model, parse_status = parse_revision_diagnostic(
             response, hist.current, tick,
             triggering_event=f"[{reason}] {outcome}")
+        if completion_observer is not None:
+            completion_observer({
+                "phase": "reflection",
+                "tick": tick,
+                "agent_id": agent.agent_id,
+                "system_prompt": None,
+                "prompt": prompt,
+                "raw_completion": response,
+                "parsed_output": new_model.to_dict(),
+                "parse_status": parse_status,
+            })
         hist.append(new_model)
         # Point the agent's live history at the updated one.
         agent.history = hist

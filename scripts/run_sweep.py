@@ -28,6 +28,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -44,6 +46,25 @@ def log(msg: str = "") -> None:
     interleave correctly with each subprocess's inherited stdout instead of
     getting buffered and appearing out of order."""
     print(msg, flush=True)
+
+
+def condition_slug(cfg: dict, policy: str, prompt: str | None) -> str:
+    """Name an immutable condition directory, not merely an experiment name.
+
+    Prompt wording is a treatment.  Including it (and the full config hash) in
+    the path prevents a leading-prompt rerun from appending its rows to a flat
+    control's ``seed_N`` logs.
+    """
+    effective_prompt = prompt if policy == "llm" else None
+    payload = {
+        "policy": policy,
+        "prompt": effective_prompt,
+        "config": cfg,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+    label = effective_prompt or "default"
+    return f"{policy}-{label}-{digest}"
 
 
 def main():
@@ -63,12 +84,14 @@ def main():
     experiment_name = cfg.get(
         "experiment_name", os.path.splitext(os.path.basename(args.config))[0])
     script = "run_stub.py" if args.policy == "stub" else "run_llm.py"
+    condition = condition_slug(cfg, args.policy, args.prompt or cfg.get(
+        "reflection", {}).get("prompt"))
 
     log(f"Sweeping '{experiment_name}' ({args.policy}) across "
           f"{len(seeds)} seeds: {seeds}")
 
     for seed in seeds:
-        run_id = f"{experiment_name}/seed_{seed}"
+        run_id = f"{experiment_name}/{condition}/seed_{seed}"
         cmd = [sys.executable, os.path.join(SCRIPT_DIR, script),
               "--config", args.config, "--seed", str(seed), "--run-id", run_id]
         if args.policy == "llm" and args.prompt:
@@ -87,7 +110,7 @@ def main():
             sys.exit(result.returncode)
 
     if not args.dry_run:
-        log(f"\nSweep complete. Logs in runs/{experiment_name}/seed_*/")
+        log(f"\nSweep complete. Logs in runs/{experiment_name}/{condition}/seed_*/")
 
 
 if __name__ == "__main__":

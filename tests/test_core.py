@@ -207,7 +207,7 @@ def test_talk_exchanges_self_model_content(tmp_path):
     b = Agent("a1", "loc", DriveSystem(), SelfModelHistory("a1"))
     b.history.append(b.history.current.revise(who_i_am="a wanderer", tick=1))
     logger = RunLogger("test_talk", root=str(tmp_path))
-    world = World(["loc"], [], [a, b], logger)
+    world = World(["loc"], [], [a, b], logger, communication_mode="self_model")
 
     outcome = world.resolve_action(a, "talk:a1")
     logger.close()
@@ -237,7 +237,8 @@ def test_crisis_triggers_immediate_reflection(tmp_path):
                                          replenish_amount=1.0, lethal=True)}
     agent = Agent("a0", "loc", DriveSystem(specs=specs), SelfModelHistory("a0"))
     logger = RunLogger("test_crisis_reflect", root=str(tmp_path))
-    world = World(["loc"], [], [agent], logger, mortality=True)
+    world = World(["loc"], [], [agent], logger, mortality=True,
+                  crisis_reflection_enabled=True)
 
     calls = []
 
@@ -287,7 +288,7 @@ def test_talk_persists_to_both_parties_long_term_memory(tmp_path):
     a = Agent("a0", "loc", DriveSystem(), SelfModelHistory("a0"))
     b = Agent("a1", "loc", DriveSystem(), SelfModelHistory("a1"))
     logger = RunLogger("test_talk_ltm", root=str(tmp_path))
-    world = World(["loc"], [], [a, b], logger)
+    world = World(["loc"], [], [a, b], logger, communication_mode="self_model")
     world.resolve_action(a, "talk:a1")
     logger.close()
     assert any("talked with a1" in m for m in a.long_term_memory)

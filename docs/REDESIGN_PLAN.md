@@ -46,22 +46,40 @@ paraphrase / held-out maps, (6) observable in behavior, not only self-descriptio
 
 ## Tranches (each independently runnable + testable)
 
-### Tranche 1 — condition scaffolding + fix the vocabulary leak  ← IN PROGRESS
-- `primed` / `show_self_model` / `directive` switches so an arm can omit the self-model
+### Tranche 1 — condition scaffolding + fix the vocabulary leak  ← CORE DONE
+- [x] `primed` / `show_self_model` / `directive` switches so an arm can omit the self-model
   block, the "survive/find your purpose" directive, and all "who you are" framing from
   the live prompt; reflection becomes optional.
-- **Fix review issue #2:** route the outcome / memory / crisis strings
+- [x] **Fix review issue #2:** route the outcome / memory / crisis strings
   (`world.py` `consumed {drive} resource`, `... ran out`, `nearly died from {drive}`)
   through the vocabulary layer, so the neutral arm no longer leaks `hunger`/`thirst`
   into the *reflection* prompt via `recent_memories`. Extend the vocab test to the
   reflection path (the action-prompt-only test was the exact hole the review found).
-- Defaults preserve today's behavior (self-narrative + directive = the *original-prompt
-  arm* / positive control). No new runnable baseline config yet — see the open tradeoff.
+- [x] Runnable de-primed baseline config (`configs/experiment_deprimed_baseline.yaml`)
+  plus the preserved self-narrative/original-prompt positive-control switches.
 
-### Tranche 2 — factual memory + opaque vocabulary arm
-- Replace narratively-loaded memory ("nearly died", "ran out", "salient") with a factual
-  ledger: `tick 15: used R3; S1 0.31 -> 0.77`, `tick 16: message from A7`.
-- Add an `opaque` vocabulary arm (`S1/S2`, `R1/R2/R3`) alongside neutral/biological.
+### Tranche 2 — factual memory + opaque vocabulary arm  ← DONE
+- [x] `opaque` vocabulary arm (`aiworld/vocabulary.py`): fully symbolic `S1/S2/S3`
+  state names and `R1/R2/R3` resource names, with NUMERIC state rendering
+  (`S1: 0.42`, not `S1: overwhelming`) — even the neutral arm's intensity words
+  ("overwhelming") are semantic loading, so opaque drops them too. Strongest
+  de-priming available; neutral/biological/opaque are now three points on one
+  vocabulary axis.
+- [x] `memory_style` condition (`narrative` | `factual`, `world.py` + config +
+  `run_llm.py --memory-style`): `factual` replaces every narratively-loaded outcome
+  and memory string (`"nearly died"`, `"ran out while you were there"`,
+  `"approached you and described themself as"`) with a plain event ledger —
+  `"consumed R1; R1 0.90 -> 0.30"`, `"moved from north to center"`,
+  `"R1 depleted at north"`, `"attacked by a0"`. Covers every action: consume (incl.
+  the T4 node/inventory/public fallback chain), gather, transfer, build, take,
+  attack, move, talk, and the crisis-threshold memory.
+- [x] `talk`'s self-model-transmission MECHANIC is deliberately unchanged under
+  `factual` — only the surrounding framing words differ ("received message from
+  X" vs. "X approached you and described themself as"). Removing the mechanic
+  itself is Tranche 5's "no automatic self-model transmission" item.
+- [x] Within the old communication treatment, `narrative` retains the original
+  sentence forms; T5 subsequently made identity transmission an explicit treatment
+  rather than the default.
 
 ### Tranche 3 — behavioral metrics (unblocks the baseline)  ← CORE DONE
 - [x] Primary outcome is now a **behavioral** feature vector, not self-model embedding
@@ -101,22 +119,36 @@ paraphrase / held-out maps, (6) observable in behavior, not only self-descriptio
   hand-to-mouth agent both survive a fixed scenario, mortality stays reachable despite
   consume-from-store, and consume-from-store actually works.
 - [ ] Deferred to **Tranche 4b**: `trade` (needs a two-sided negotiation protocol),
-  form/break `agreements`, and generated free-text `messages` (talk currently injects
-  the speaker's self-model rather than model-authored dialogue).
+  form/break `agreements`, and generated free-text `messages` (T5's default `talk`
+  records contact only; `self_model` transfer is an explicit positive control).
 
-### Tranche 5 — remove hidden asymmetries
-- Simultaneous action proposals + fair conflict resolution; randomize/counterbalance
-  execution order each tick (fixes fixed-ID first-mover advantage).
-- Randomize opaque location/resource labels across seeds; balance starts/maps.
-- No automatic self-model transmission on `talk` (add generated-dialogue or
-  no-communication baseline).
-- Condition-specific, immutable run folders (fixes the sweep-append contamination,
-  review #3); log model version, full resolved config, prompts, seed, decoding params,
-  action order, raw completions, and parse failures (review reproducibility gap).
-- Send an LLM sampling `seed` (currently only temperature is set — not reproducible).
-- Guard reflection so a just-died agent doesn't reflect; separate crisis-triggered
-  reflections from scheduled ones so mortal/scarce arms don't get extra identity-
-  generation "dosage" (review #4).
+### Tranche 5 — remove hidden asymmetries  ← DONE
+- [x] **Simultaneous proposals, random-priority resolution.** Every living agent sees
+  a frozen pre-action state; proposals and conflict resolution are independently
+  seeded permutations and their indices/outcomes are logged. This is accurately a
+  random-priority rule, not a claim of fully atomic effects. Valid moves commit as a
+  shared post-conflict phase, eliminating fixed-ID first-mover advantage.
+- [x] **Counterbalanced presentation and starts/maps.** Opaque runs shuffle `L*`,
+  `R*`, and `S*` aliases per seed and translate locations back before resolution;
+  metadata stores the complete map. `start_mode: balanced` equalizes placements, and
+  `resource_map_mode: counterbalanced` permutes resources only among
+  topology-equivalent sites, with a logged map ID.
+- [x] **No automatic identity contagion.** `communication.mode: none` is the primary
+  contact-only/no-content condition. The old self-model transfer is retained solely
+  as the explicit `self_model` positive-control treatment; generated dialogue is not
+  silently introduced as an extra LLM-call dosage.
+- [x] **Immutable, condition-specific provenance.** A reused run ID fails rather than
+  appending. Sweeps write `<experiment>/<policy-prompt-config-hash>/seed_N`; metadata
+  holds the resolved config/hash, condition, placements/labels, prompts, seed and
+  decoding setup. Tick records hold proposal/resolution order and outcomes;
+  `completions.jsonl` holds raw prompts/completions and parse status.
+- [x] **Sampling seed.** `--sampling-seed` defaults to the run seed and is sent to
+  OpenAI-compatible backends; providers without a seed field are marked unsupported
+  in the provenance record rather than treated as reproducible.
+- [x] **Equal reflection dosage by default.** Crisis crossings remain memory/events,
+  but `reflection.crisis_triggered: false` prevents an extra identity-generation
+  draw in mortal/scarce arms. It can be enabled as a separately logged treatment;
+  a just-died agent never reflects.
 
 ---
 

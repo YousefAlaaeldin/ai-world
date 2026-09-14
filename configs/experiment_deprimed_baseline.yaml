@@ -41,10 +41,14 @@ world:
     - {location: east,  drive: hunger, quantity: 15}
     - {location: west,  drive: thirst, quantity: 15}
   mortality: true
-  vocabulary: neutral   # neutral | biological
+  vocabulary: neutral   # neutral | biological | opaque
+  memory_style: narrative   # match the comparison arm unless memory framing is varied
+  resource_map_mode: counterbalanced   # seed-counterbalanced within topology class
+  randomize_opaque_labels: true        # applies when vocabulary: opaque
 
 agents:
   count: 6
+  start_mode: balanced          # no agent-ID/location confound
   show_self_model: false      # de-primed: no self-description fed back
   directive: null             # de-primed: no assigned objective
 
@@ -56,7 +60,12 @@ drives:
 reflection:
   every_n_ticks: 5
   enabled: false              # de-primed: no self-authoring at all
+  crisis_triggered: false     # never add condition-specific extra LLM dosage
   prompt: flat                # unused when enabled: false
+
+communication:
+  # Contact may be observed behaviorally, but it transfers no identity/content.
+  mode: none                  # none | self_model (explicit positive control)
 
 run:
   ticks: 40

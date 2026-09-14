@@ -79,12 +79,16 @@ class DriveSystem:
     """All drives for a single agent."""
 
     def __init__(self, specs: dict[DriveKind, DriveSpec] | None = None,
-                 vocabulary: str = "neutral"):
+                 vocabulary: str = "neutral", opaque_state_labels: dict | None = None):
         self.specs = specs or DEFAULT_SPECS
         # How internal state is NAMED to the model ('neutral' | 'biological').
         # Only affects as_prompt_block() text, never the mechanics or log keys.
         # See aiworld/vocabulary.py for why this is a confound control.
         self.vocabulary = vocabulary
+        # Per-run shuffled labels for the opaque arm.  A World assigns these at
+        # construction so S1/S2 are not a fixed alias for the same internal
+        # drive across every seed.  They affect only prompt rendering.
+        self.opaque_state_labels = opaque_state_labels or {}
         self.states: dict[DriveKind, DriveState] = {
             kind: DriveState(kind=kind, level=0.0) for kind in self.specs
         }
@@ -145,10 +149,18 @@ class DriveSystem:
         biological priors aren't invoked; 'biological' restores food/hunger framing
         as the contrast arm. Structure is identical across arms — only nouns differ.
         """
-        from .vocabulary import state_noun, state_prefix  # local: avoid import cycle
+        # local: avoid import cycle
+        from .vocabulary import state_noun, state_prefix, NUMERIC_STATE_ARMS
+        numeric = self.vocabulary in NUMERIC_STATE_ARMS
         phrases = []
         for kind, state in self.states.items():
-            phrases.append(f"{state_noun(kind, self.vocabulary)}: {_describe(state.level)}")
+            # The opaque arm also drops the qualitative intensity word
+            # ("overwhelming") for a raw number -- that word is itself semantic
+            # loading ("overwhelming" implies distress); a bare number carries none.
+            level_text = f"{state.level:.2f}" if numeric else _describe(state.level)
+            phrases.append(
+                f"{state_noun(kind, self.vocabulary, self.opaque_state_labels)}: "
+                f"{level_text}")
         return f"{state_prefix(self.vocabulary)} — " + ", ".join(phrases)
 
     def snapshot(self) -> dict[str, float]:

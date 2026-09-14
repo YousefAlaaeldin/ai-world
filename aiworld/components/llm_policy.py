@@ -20,6 +20,7 @@ import re
 from ..self_model import SHARED_DIRECTIVE
 from ..sim.world import Agent, World
 from ..llm_client import LLMClient
+from ..logging_schema import CompletionRecord
 
 
 # The system prompt is an experimental variable, not a fixed frame (docs/
@@ -32,7 +33,8 @@ from ..llm_client import LLMClient
 def _action_system_prompt(vocabulary: str = "neutral",
                           directive: str | None = SHARED_DIRECTIVE,
                           show_self_model: bool = True) -> str:
-    state_word = "bodily state" if vocabulary == "biological" else "internal state"
+    state_word = ("bodily state" if vocabulary == "biological"
+                  else "state" if vocabulary == "opaque" else "internal state")
     if not directive and not show_self_model:
         # De-primed open-world baseline: no assigned goal, no identity framing, no
         # self-model. Only environment + actions. This is the arm that lets us ask
@@ -79,7 +81,9 @@ def _build_action_prompt(agent: Agent, perceived: str, world: World,
     # when the world only lets it reach neighbors would make every 'wait'
     # fallback (an unreachable move gets silently demoted to wait) look like a
     # model failure instead of what it is, a world-topology constraint.
-    reachable = ", ".join(sorted(world.adjacency.get(agent.location, ())))
+    reachable = ", ".join(
+        sorted(world.location_label(loc)
+               for loc in world.adjacency.get(agent.location, ())))
     places = reachable or "(nowhere reachable from here)"
     here_agents = [a.agent_id for a in world.agents
                    if a.agent_id != agent.agent_id and a.location == agent.location
@@ -90,16 +94,16 @@ def _build_action_prompt(agent: Agent, perceived: str, world: World,
     self_block = (f"{agent.history.current.as_prompt_block()}\n\n"
                   if show_self_model else "")
     # What the agent is carrying, vocabulary-routed so the neutral arm doesn't leak.
-    from ..vocabulary import resource_noun  # local: avoid import cycle
     held = {k: v for k, v in agent.inventory.items() if v > 0}
-    carried = (", ".join(f"{resource_noun(k, world.vocabulary)} x{v}"
+    carried = (", ".join(f"{world.resource_noun(k)} x{v}"
                          for k, v in held.items()) if held else "nothing")
     return (
         f"{self_block}"
         f"{agent.drives.as_prompt_block()}\n\n"
         f"You are carrying: {carried}.\n\n"
         f"{perceived}\n\n"
-        f"You are at: {agent.location}. Places you could move to: {places}. "
+        f"You are at: {world.location_label(agent.location)}. "
+        f"Places you could move to: {places}. "
         f"Agents here: {talkable}.\n\n"
         f"{LEGAL_ACTIONS_HELP}\n"
         f"Your action:"
@@ -111,25 +115,41 @@ _ACTION_RE = re.compile(
     r"|consume|gather|build|wait)\b", re.IGNORECASE)
 
 
-def parse_action(raw: str, world: World, agent: Agent) -> str:
-    """Extract a legal action from the model's response. Falls back to 'wait'."""
+def parse_action_diagnostic(raw: str, world: World, agent: Agent) -> tuple[str, str]:
+    """Extract an action plus an auditable parse status.
+
+    A raw ``wait`` is a valid decision, whereas a malformed response falling
+    back to ``wait`` is a data-quality event.  The distinction is required for
+    reproducible behavioral analysis and is intentionally kept out of the
+    action grammar itself.
+    """
     if not raw:
-        return "wait"
+        return "wait", "empty_completion"
     m = _ACTION_RE.search(raw.strip())
     if not m:
-        return "wait"
+        return "wait", "no_legal_action"
     action = m.group(1).lower()
     # Validate targets against reality; invalid -> wait.
     if action.startswith("move:"):
-        dest = action.split(":", 1)[1]
-        if dest not in world.adjacency.get(agent.location, ()):
-            return "wait"
+        supplied = action.split(":", 1)[1]
+        # In an opaque-location condition, accept only the displayed label from
+        # model output, then convert it back to the internal resolver key.
+        dest = world.canonical_location(
+            supplied, allow_internal=world.vocabulary != "opaque")
+        if dest is None or dest not in world.adjacency.get(agent.location, ()):
+            return "wait", "invalid_move"
+        action = f"move:{dest}"
     # Every directed action needs a living, co-located target.
     if action.split(":", 1)[0] in ("talk", "transfer", "take", "attack") and ":" in action:
         target = action.split(":", 1)[1]
         if world._here_target(agent, target) is None:
-            return "wait"
-    return action
+            return "wait", "invalid_target"
+    return action, "ok"
+
+
+def parse_action(raw: str, world: World, agent: Agent) -> str:
+    """Backward-compatible action-only wrapper around the diagnostic parser."""
+    return parse_action_diagnostic(raw, world, agent)[0]
 
 
 def make_llm_policy(client: LLMClient, vocabulary: str = "neutral",
@@ -149,6 +169,34 @@ def make_llm_policy(client: LLMClient, vocabulary: str = "neutral",
         prompt = _build_action_prompt(agent, perceived, world,
                                       show_self_model=show_self_model)
         raw = client.complete(prompt, system=system_prompt)
-        return parse_action(raw, world, agent)
+        action, status = parse_action_diagnostic(raw, world, agent)
+        # World.run emits the structural per-tick trace.  Retaining the full
+        # request/response on the agent lets this policy work with a tiny fake
+        # client in tests as well as with the logging-aware real client.
+        agent.last_action_prompt = prompt
+        agent.last_action_system_prompt = system_prompt
+        agent.last_raw_completion = raw
+        agent.last_parse_status = status
+        request_metadata = {}
+        response_metadata = {}
+        get_request_metadata = getattr(client, "request_metadata", None)
+        get_response_metadata = getattr(client, "response_metadata", None)
+        if callable(get_request_metadata):
+            request_metadata = get_request_metadata()
+        if callable(get_response_metadata):
+            response_metadata = get_response_metadata()
+        world.logger.log_completion(CompletionRecord(
+            phase="action",
+            tick=world.tick_count,
+            agent_id=agent.agent_id,
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+            raw_completion=raw,
+            parsed_output=action,
+            parse_status=status,
+            request_metadata=request_metadata,
+            response_metadata=response_metadata,
+        ))
+        return action
 
     return policy

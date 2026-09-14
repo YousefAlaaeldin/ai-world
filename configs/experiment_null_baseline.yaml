@@ -60,9 +60,13 @@ world:
     - {location: outpost_6, drive: thirst, quantity: 999999}
   mortality: false
   vocabulary: neutral   # neutral | biological -- match experiment_minimal.yaml for a fair contrast
+  memory_style: narrative
+  resource_map_mode: counterbalanced
+  randomize_opaque_labels: true
 
 agents:
   count: 6
+  start_mode: balanced  # with 6 sites this is exactly one agent per site
   # count MUST equal len(world.locations) for true one-per-location isolation
   # (initial_locations() falls back to random-with-replacement otherwise).
 
@@ -73,7 +77,11 @@ drives:
 
 reflection:
   every_n_ticks: 5
+  crisis_triggered: false  # avoid unequal event-triggered reflection dosage
   prompt: flat        # match experiment_minimal.yaml's default for a fair contrast
+
+communication:
+  mode: none
 
 run:
   ticks: 40
