@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from aiworld.analysis.run_level import (  # noqa: E402
+    condition_attrition,
     paired_condition_comparison,
     run_summary,
     seed_run_dirs,
@@ -99,3 +100,58 @@ def test_paired_comparison_rejects_unknown_metric_and_insufficient_pairs(tmp_pat
                                     metric="invented")
     with pytest.raises(ValueError, match="at least two matched"):
         paired_condition_comparison(str(tmp_path / "left"), str(tmp_path / "right"))
+
+
+def test_run_summary_reports_status_none_for_a_legacy_run_without_status_json(tmp_path):
+    run_dir = _write_run(tmp_path, "legacy", 0, divergent=True)
+    assert run_summary(run_dir)["run_status"] is None
+
+
+def test_run_summary_reports_completed_status_when_finalized(tmp_path):
+    run_id = "finalized/seed_0"
+    logger = RunLogger(run_id, root=str(tmp_path))
+    logger.log_meta({"run_id": run_id, "n_agents": 1,
+                     "resolved_config": {"run": {"ticks": 1}, "world": {"locations": ["L1"]}}})
+    logger.log_tick(TickRecord(
+        run_id=run_id, tick=1, agent_id="a0", alive=True,
+        drives={"hunger": 0.1, "thirst": 0.1}, position="L1", chosen_action="wait",
+        perceived="", self_model_version=0, proposed_action="wait",
+        pre_action_drives={"hunger": 0.1, "thirst": 0.1}, pre_action_position="L1",
+        proposal_valid=True, action_succeeded=True, outcome_status="no_effect",
+        outcome="waited"))
+    logger.finalize(status="completed")
+
+    assert run_summary(str(tmp_path / run_id))["run_status"] == "completed"
+
+
+def test_condition_attrition_reports_mixed_seed_statuses(tmp_path):
+    def _minimal_run(condition, seed, status):
+        run_id = f"{condition}/seed_{seed}"
+        logger = RunLogger(run_id, root=str(tmp_path))
+        logger.log_meta({"run_id": run_id})
+        logger.finalize(status=status)
+
+    _minimal_run("cond", 0, "completed")
+    _minimal_run("cond", 1, "completed")
+    _minimal_run("cond", 2, "aborted")
+    _minimal_run("cond", 3, "invalid_output")
+    # seed 4: no finalize() at all -- a legacy/unknown status.
+    RunLogger("cond/seed_4", root=str(tmp_path)).close()
+
+    result = condition_attrition(str(tmp_path / "cond"))
+
+    assert result["n_seeds_total"] == 5
+    assert result["n_completed"] == 2
+    assert result["n_aborted"] == 1
+    assert result["n_invalid_output"] == 1
+    assert result["n_status_unknown"] == 1
+    assert result["completed_rate"] == pytest.approx(0.4)
+    assert result["aborted_rate"] == pytest.approx(0.2)
+    assert result["invalid_output_rate"] == pytest.approx(0.2)
+    assert result["seed_statuses"]["seed_2"] == "aborted"
+
+
+def test_condition_attrition_empty_sweep():
+    result = condition_attrition("runs/does_not_exist")
+    assert result["n_seeds_total"] == 0
+    assert result["completed_rate"] == 0.0

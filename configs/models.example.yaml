@@ -1,0 +1,42 @@
+# Example ModelSpec registry (aiworld/model_spec.py). Copy to a private
+# configs/models.yaml and extend for a real run; this file is checked in as
+# example data so `--model-spec <name>` has something to point at without
+# requiring a private config first.
+#
+# Two entries: the project's current default, and the pinned second model
+# family for cross-family replication (evidence gate #6,
+# docs/EXPERIMENT_PROTOCOL.md: "replicated with at least one additional
+# pinned model family before any general statement about LLMs").
+
+mistral_small_abliterated:
+  family: mistral
+  size_label: small
+  param_count: 24000000000
+  model_identifier: huihui_ai/mistral-small-abliterated:24b
+  weight_digest: null
+  tokenizer: mistral-default
+  quantization: unspecified
+  serving_stack: ollama
+  decode_settings:
+    temperature: 0.8
+    max_tokens: 300
+  capability_score_source: null
+
+# Pinned second family (this build's Phase 8): a different pretraining/RLHF
+# lineage than Mistral, served through the SAME OpenAI-compatible local
+# Ollama endpoint aiworld/llm_client.py already speaks -- zero new client
+# code needed to run against it. Named here rather than left as an empty
+# schema so evidence gate #6 has a concrete target to aim at.
+qwen2_5_14b_instruct:
+  family: qwen2.5
+  size_label: medium
+  param_count: 14000000000
+  model_identifier: qwen2.5:14b-instruct
+  weight_digest: null
+  tokenizer: qwen2.5-default
+  quantization: unspecified
+  serving_stack: ollama
+  decode_settings:
+    temperature: 0.8
+    max_tokens: 300
+  capability_score_source: null

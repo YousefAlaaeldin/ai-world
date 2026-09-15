@@ -19,6 +19,7 @@ from typing import Iterable
 import numpy as np
 
 from .behavioral_metrics import FEATURE_NAMES, behavioral_features_run, feature_matrix
+from .provenance import load_run_provenance, require_compatible_pair
 
 
 RUN_LEVEL_METRICS = ("behavioral_dispersion", *(
@@ -59,7 +60,43 @@ def run_summary(run_dir: str) -> dict[str, float | int]:
         f"mean_{feature}": float(means[index])
         for index, feature in enumerate(FEATURE_NAMES)
     })
+    # Run-level completion status as a reported field, not a silent filter
+    # (this build's Phase 5). None means no status.json -- a legacy run or a
+    # hand-built fixture, not evidence the run failed.
+    summary["run_status"] = load_run_provenance(run_dir).get("status")
     return summary
+
+
+def condition_attrition(sweep_dir: str) -> dict[str, object]:
+    """Per-condition completion/attrition, read directly from each seed's
+    provenance (never via behavioral analysis, which refuses a non-completed
+    run outright -- see aiworld.analysis.provenance).
+
+    Reporting this is the point: abort/invalid-output rate can correlate
+    with condition (e.g. opaque vocabulary, long factual ledgers), and
+    silently dropping those seeds from ``condition_summaries`` would bias
+    exactly the crisis states a behavioral-commitment claim depends on.
+    """
+    run_dirs = seed_run_dirs(sweep_dir)
+    statuses = {seed: load_run_provenance(path).get("status")
+               for seed, path in run_dirs.items()}
+    n_total = len(statuses)
+
+    def _rate(status: str) -> float:
+        return (sum(1 for s in statuses.values() if s == status) / n_total
+               if n_total else 0.0)
+
+    return {
+        "n_seeds_total": n_total,
+        "n_completed": sum(1 for s in statuses.values() if s == "completed"),
+        "n_aborted": sum(1 for s in statuses.values() if s == "aborted"),
+        "n_invalid_output": sum(1 for s in statuses.values() if s == "invalid_output"),
+        "n_status_unknown": sum(1 for s in statuses.values() if s is None),
+        "completed_rate": _rate("completed"),
+        "aborted_rate": _rate("aborted"),
+        "invalid_output_rate": _rate("invalid_output"),
+        "seed_statuses": statuses,
+    }
 
 
 def seed_run_dirs(sweep_dir: str) -> dict[str, str]:
@@ -123,6 +160,8 @@ def paired_condition_comparison(
         choices = ", ".join(RUN_LEVEL_METRICS)
         raise ValueError(f"Unknown run-level metric {metric!r}; choose one of: {choices}")
 
+    left_run_dirs = seed_run_dirs(left_sweep_dir)
+    right_run_dirs = seed_run_dirs(right_sweep_dir)
     left = condition_summaries(left_sweep_dir)
     right = condition_summaries(right_sweep_dir)
     paired_seeds = sorted(set(left) & set(right))
@@ -131,6 +170,13 @@ def paired_condition_comparison(
             "Need at least two matched seed_* world runs for a paired condition "
             f"comparison; found {len(paired_seeds)}."
         )
+    # One representative matched seed is enough: a sweep is one condition run
+    # across seeds, so its provenance (model/decode/map/start mode) should be
+    # uniform within the sweep by construction. This catches the realistic
+    # failure mode -- comparing two different experiments/models entirely --
+    # without re-reading every seed's metadata on every comparison.
+    require_compatible_pair(
+        left_run_dirs[paired_seeds[0]], right_run_dirs[paired_seeds[0]])
 
     left_values = np.array([float(left[seed][metric]) for seed in paired_seeds])
     right_values = np.array([float(right[seed][metric]) for seed in paired_seeds])

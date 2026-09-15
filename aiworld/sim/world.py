@@ -33,6 +33,21 @@ class ResourceNode:
 
 
 @dataclasses.dataclass
+class TickResult:
+    """Summary of what one World.step() call just did.
+
+    Lets a caller (World.run(), or a branch runner stepping one decision at a
+    time -- see aiworld/sim/snapshot.py) inspect deaths/crises/extinction
+    without re-parsing the tick log.
+    """
+    tick: int
+    live_at_start: list[str]    # agent_ids alive when this tick began
+    deaths: list[str]           # agent_ids that died DURING this tick
+    crises_crossed: list[str]   # agent_ids that newly crossed into crisis
+    extinct: bool                # True if every agent is dead after this tick
+
+
+@dataclasses.dataclass
 class Agent:
     agent_id: str
     location: str
@@ -266,6 +281,101 @@ class World:
             "opaque_labels_randomized": bool(
                 self.vocabulary == "opaque" and self.randomize_opaque_labels),
         }
+
+    # ---- snapshot / restore (aiworld/sim/snapshot.py) ----
+
+    def snapshot(self) -> "WorldSnapshot":  # noqa: F821 - imported lazily below
+        """Capture this World's exact current state as a JSON-safe snapshot.
+
+        See aiworld/sim/snapshot.py for what is (and deliberately is not)
+        captured. Local import avoids a module-load cycle: snapshot.py needs
+        ``Agent`` from this module to rebuild agents on restore.
+        """
+        from .snapshot import AgentSnapshot, WorldSnapshot, rng_state_to_json
+
+        return WorldSnapshot(
+            tick_count=self.tick_count,
+            locations=list(self.locations),
+            adjacency={loc: sorted(neighbors)
+                      for loc, neighbors in self.adjacency.items()},
+            resources=[
+                {"location": r.location, "drive": r.drive.value, "quantity": r.quantity}
+                for r in self.resources
+            ],
+            public_stock={
+                loc: {(k.value if isinstance(k, DriveKind) else str(k)): v
+                      for k, v in stock.items()}
+                for loc, stock in self.public_stock.items()
+            },
+            mortality=self.mortality,
+            vocabulary=self.vocabulary,
+            memory_style=self.memory_style,
+            communication_mode=self.communication_mode,
+            crisis_reflection_enabled=self.crisis_reflection_enabled,
+            randomize_opaque_labels=self.randomize_opaque_labels,
+            location_labels=dict(self.location_labels),
+            opaque_resource_labels={
+                (k.value if isinstance(k, DriveKind) else str(k)): v
+                for k, v in self.opaque_resource_labels.items()},
+            opaque_state_labels={
+                (k.value if isinstance(k, DriveKind) else str(k)): v
+                for k, v in self.opaque_state_labels.items()},
+            rng_state=rng_state_to_json(self.rng.getstate()),
+            agents=[AgentSnapshot.from_agent(a) for a in self.agents],
+        )
+
+    @classmethod
+    def from_snapshot(cls, snapshot: "WorldSnapshot", logger: RunLogger,
+                      rng: random.Random | None = None) -> "World":
+        """Reconstruct a live World from a snapshot plus a fresh logger.
+
+        ``rng=None`` (the default) restores the EXACT rng stream the parent
+        world would have continued with -- the property a "sham" branch
+        depends on to prove restoration is faithful (stepping the restored
+        world once reproduces the parent's next tick exactly). Pass an
+        explicitly seeded ``random.Random`` (e.g. from
+        ``aiworld.seed_plan.SeedPlan``) to give a genuinely perturbed branch
+        its own independent stream instead.
+        """
+        from .snapshot import rng_state_from_json
+
+        resources = [
+            ResourceNode(location=r["location"], drive=DriveKind(r["drive"]),
+                        quantity=r["quantity"])
+            for r in snapshot.resources
+        ]
+        agents = [a.build_agent() for a in snapshot.agents]
+
+        if rng is None:
+            rng = random.Random()
+            rng.setstate(rng_state_from_json(snapshot.rng_state))
+
+        world = cls(
+            locations=list(snapshot.locations),
+            resources=resources,
+            agents=agents,
+            logger=logger,
+            rng=rng,
+            mortality=snapshot.mortality,
+            adjacency={loc: set(neighbors)
+                      for loc, neighbors in snapshot.adjacency.items()},
+            vocabulary=snapshot.vocabulary,
+            memory_style=snapshot.memory_style,
+            communication_mode=snapshot.communication_mode,
+            crisis_reflection_enabled=snapshot.crisis_reflection_enabled,
+            randomize_opaque_labels=snapshot.randomize_opaque_labels,
+            location_labels=dict(snapshot.location_labels),
+            opaque_resource_labels={
+                DriveKind(k): v for k, v in snapshot.opaque_resource_labels.items()},
+            opaque_state_labels={
+                DriveKind(k): v for k, v in snapshot.opaque_state_labels.items()},
+        )
+        world.tick_count = snapshot.tick_count
+        world.public_stock = {
+            loc: {DriveKind(k): v for k, v in stock.items()}
+            for loc, stock in snapshot.public_stock.items()
+        }
+        return world
 
     # ---- perception ----
 
@@ -757,232 +867,262 @@ class World:
             phrase = f"was severely depleted of {names}"
         remember_long_term(agent, f"tick {self.tick_count}: {phrase}")
 
+    def step(self, policy: Callable, reflect_every: int = 5,
+            reflect_fn: Callable | None = None) -> TickResult:
+        """Advance the simulation exactly one tick: simultaneous proposals,
+        then priority resolution.
+
+        Every living agent sees the same pre-resolution world for this tick.
+        The resulting proposals are resolved in a fresh, seeded random
+        permutation; contested effects therefore have a fully logged random
+        priority rather than a hidden fixed-ID first-mover advantage.  This is
+        deliberately not described as atomic simultaneous effects:
+        resource/directed-action conflicts use the recorded priority rule,
+        while all valid movement is applied together after non-movement
+        conflicts settle.
+
+        Returns a :class:`TickResult` so a caller (:meth:`run`, or a branch
+        runner stepping one decision at a time -- aiworld/sim/snapshot.py) can
+        inspect deaths/crises/extinction without re-parsing the tick log.
+        """
+        self.tick_count += 1
+        live_at_start = [agent for agent in self.agents if agent.drives.alive]
+        if not live_at_start:
+            return TickResult(tick=self.tick_count, live_at_start=[], deaths=[],
+                              crises_crossed=[], extinct=True)
+
+        # Freeze every perception before any policy is called.  A policy
+        # cannot receive a world observation already altered by another
+        # agent's action, even though LLM calls themselves are made serially.
+        perceived_by_id: dict[str, str] = {}
+        crisis_before: dict[str, bool] = {}
+        decision_state_by_id: dict[str, dict] = {}
+        for agent in live_at_start:
+            perceived_obs = self.observations_for(agent)
+            perceived_by_id[agent.agent_id] = render_perceived(
+                perceived_obs, agent.drives.salience_biases(), top_k=6)
+            crisis_before[agent.agent_id] = agent.drives.in_crisis()
+            # Snapshot before *any* policy is called.  The policy sees the
+            # perceived text below; analysis also needs the underlying
+            # opportunity set and pre-action state to avoid reconstructing
+            # it from a later, already-mutated world.
+            decision_state_by_id[agent.agent_id] = {
+                "drives": agent.drives.snapshot(),
+                "position": agent.location,
+                "inventory": self._inventory_snapshot(agent),
+                "opportunities": self._pre_action_opportunities(agent),
+            }
+
+        proposal_order = self.rng.sample(live_at_start, len(live_at_start))
+        proposals: list[dict] = []
+        for proposal_index, agent in enumerate(proposal_order):
+            # Avoid accidentally reusing last tick's LLM audit fields for a
+            # custom/stub policy that does not populate them.
+            agent.last_action_prompt = None
+            agent.last_action_system_prompt = None
+            agent.last_raw_completion = None
+            agent.last_parse_status = None
+            agent.last_outcome_status = None
+            agent.last_action_succeeded = None
+            action = policy(agent, perceived_by_id[agent.agent_id], self)
+            if not isinstance(action, str):
+                # Keep a malformed custom policy output from becoming an
+                # apparently intentional wait in analysis.
+                if agent.last_parse_status is None:
+                    agent.last_parse_status = "non_string_policy_output"
+                action = "wait"
+            proposals.append({
+                "agent": agent,
+                "action": action,
+                "perceived": perceived_by_id[agent.agent_id],
+                "decision_state": decision_state_by_id[agent.agent_id],
+                "parse_status": agent.last_parse_status,
+                "proposal_valid": self._proposal_is_valid(
+                    action, agent.last_parse_status),
+                "proposal_index": proposal_index,
+            })
+
+        resolution_order = self.rng.sample(proposals, len(proposals))
+        outcomes: dict[str, str] = {}
+        outcome_statuses: dict[str, str] = {}
+        action_succeeded: dict[str, bool] = {}
+        resolution_index: dict[str, int] = {}
+        moves: list[dict] = []
+
+        # Non-movement actions are resolved from the pre-move world.  A
+        # resource conflict is thus decided only by the registered random
+        # priority, not list/agent-ID order.
+        for rank, proposal in enumerate(resolution_order):
+            agent = proposal["agent"]
+            action = proposal["action"]
+            resolution_index[agent.agent_id] = rank
+            if action.startswith("move:"):
+                moves.append(proposal)
+                continue
+            if not agent.drives.alive:
+                outcomes[agent.agent_id] = (
+                    "proposal not resolved because the agent was killed before "
+                    "its priority turn")
+                outcome_statuses[agent.agent_id] = "not_resolved"
+                action_succeeded[agent.agent_id] = False
+                agent.last_outcome_status = "not_resolved"
+                agent.last_action_succeeded = False
+                continue
+            outcomes[agent.agent_id] = self.resolve_action(agent, action)
+            outcome_statuses[agent.agent_id] = agent.last_outcome_status or "unknown"
+            action_succeeded[agent.agent_id] = bool(agent.last_action_succeeded)
+
+        # Validate moves against the untouched pre-move positions, then
+        # commit all valid moves as one phase.  Multiple agents may enter a
+        # place; movement itself is not a scarce claim.
+        valid_moves: list[tuple[dict, str, str]] = []
+        for proposal in moves:
+            agent = proposal["agent"]
+            action = proposal["action"]
+            raw_dest = action.split(":", 1)[1]
+            dest = self.canonical_location(raw_dest) or raw_dest
+            if not agent.drives.alive:
+                outcomes[agent.agent_id] = (
+                    "proposal not resolved because the agent was killed before "
+                    "the movement phase")
+                outcome_statuses[agent.agent_id] = "not_resolved"
+                action_succeeded[agent.agent_id] = False
+                agent.last_outcome_status = "not_resolved"
+                agent.last_action_succeeded = False
+            elif dest in self.adjacency.get(agent.location, ()):
+                valid_moves.append((proposal, agent.location, dest))
+            else:
+                outcomes[agent.agent_id] = f"tried to move to unreachable place {raw_dest}"
+                outcome_statuses[agent.agent_id] = "failed"
+                action_succeeded[agent.agent_id] = False
+                agent.last_outcome_status = "failed"
+                agent.last_action_succeeded = False
+        for proposal, source, dest in valid_moves:
+            proposal["agent"].location = dest
+        for proposal, source, dest in valid_moves:
+            if self.memory_style == "factual":
+                outcomes[proposal["agent"].agent_id] = (
+                    f"moved from {self.location_label(source)} to "
+                    f"{self.location_label(dest)}")
+            else:
+                outcomes[proposal["agent"].agent_id] = (
+                    f"moved to {self.location_label(dest)}")
+            agent = proposal["agent"]
+            outcome_statuses[agent.agent_id] = "success"
+            action_succeeded[agent.agent_id] = True
+            agent.last_outcome_status = "success"
+            agent.last_action_succeeded = True
+
+        # All resolved outcomes become memories before the uniform body
+        # update.  An agent killed by an attack is still logged for this
+        # tick, but never stepped or reflected after death.
+        for proposal in proposals:
+            agent = proposal["agent"]
+            action = proposal["action"]
+            outcome = outcomes.get(agent.agent_id, "waited")
+            agent.recent_memories.append(
+                f"tick {self.tick_count}: did '{action}' -> {outcome}")
+
+        crisis_crossed: dict[str, bool] = {}
+        for proposal in proposals:
+            agent = proposal["agent"]
+            if not agent.drives.alive:
+                crisis_crossed[agent.agent_id] = False
+                continue
+            agent.drives.step(self.tick_count, mortality=self.mortality)
+            if not agent.drives.alive and self.mortality:
+                self.logger.log_event(EventRecord(
+                    self.logger.run_id, self.tick_count, "death",
+                    agent.agent_id,
+                    f"died of {agent.drives.cause_of_death}"))
+                crisis_crossed[agent.agent_id] = False
+                continue
+            crossed = (agent.drives.in_crisis()
+                       and not crisis_before[agent.agent_id])
+            crisis_crossed[agent.agent_id] = crossed
+            if crossed:
+                self._crisis_memory(agent)
+
+        scheduled = reflect_every > 0 and self.tick_count % reflect_every == 0
+        reflection_reason: dict[str, str | None] = {}
+        for proposal in proposals:
+            agent = proposal["agent"]
+            if not agent.drives.alive:
+                # Explicit guard: a death on a scheduled tick must never
+                # create a post-mortem self-model revision.
+                reflection_reason[agent.agent_id] = None
+                continue
+            crisis = crisis_crossed.get(agent.agent_id, False)
+            should_reflect = scheduled or (self.crisis_reflection_enabled and crisis)
+            if scheduled and crisis:
+                reason = "scheduled+crisis"
+            elif scheduled:
+                reason = "scheduled"
+            elif crisis:
+                reason = "crisis"
+            else:
+                reason = None
+            if reflect_fn and should_reflect:
+                reflect_fn(agent, proposal["perceived"],
+                          outcomes[agent.agent_id], self.tick_count,
+                          reason=reason)
+            reflection_reason[agent.agent_id] = reason if should_reflect else None
+
+        for proposal in proposals:
+            agent = proposal["agent"]
+            action = proposal["action"]
+            self.logger.log_tick(TickRecord(
+                run_id=self.logger.run_id,
+                tick=self.tick_count,
+                agent_id=agent.agent_id,
+                alive=agent.drives.alive,
+                drives=agent.drives.snapshot(),
+                position=agent.location,
+                chosen_action=action,
+                perceived=proposal["perceived"],
+                self_model_version=agent.history.current.version,
+                cause_of_death=agent.drives.cause_of_death,
+                proposal_index=proposal["proposal_index"],
+                resolution_index=resolution_index[agent.agent_id],
+                proposed_action=action,
+                pre_action_drives=proposal["decision_state"]["drives"],
+                pre_action_position=proposal["decision_state"]["position"],
+                pre_action_inventory=proposal["decision_state"]["inventory"],
+                pre_action_opportunities=proposal["decision_state"]["opportunities"],
+                parse_status=proposal["parse_status"],
+                proposal_valid=proposal["proposal_valid"],
+                outcome_status=outcome_statuses.get(agent.agent_id, "unknown"),
+                action_succeeded=action_succeeded.get(agent.agent_id, False),
+                outcome=outcomes[agent.agent_id],
+                reflection_reason=reflection_reason[agent.agent_id],
+            ))
+
+        died_this_tick = [agent.agent_id for agent in live_at_start
+                          if not agent.drives.alive]
+        crossed_ids = [aid for aid, crossed in crisis_crossed.items() if crossed]
+        extinct = all(not agent.drives.alive for agent in self.agents)
+        if extinct:
+            self.logger.log_event(EventRecord(
+                self.logger.run_id, self.tick_count, "extinction", None,
+                "all agents dead"))
+
+        return TickResult(
+            tick=self.tick_count,
+            live_at_start=[a.agent_id for a in live_at_start],
+            deaths=died_this_tick,
+            crises_crossed=crossed_ids,
+            extinct=extinct,
+        )
+
     def run(self, policy: Callable, ticks: int, reflect_every: int = 5,
             reflect_fn: Callable | None = None) -> None:
-        """Advance the simulation using simultaneous proposals, then priority resolution.
+        """Advance the simulation ``ticks`` times via repeated :meth:`step` calls.
 
-        Every living agent sees the same pre-resolution world for a tick.  The
-        resulting proposals are resolved in a fresh, seeded random permutation;
-        contested effects therefore have a fully logged random priority rather
-        than a hidden fixed-ID first-mover advantage.  This is deliberately not
-        described as atomic simultaneous effects: resource/directed-action
-        conflicts use the recorded priority rule, while all valid movement is
-        applied together after non-movement conflicts settle.
+        A thin loop over :meth:`step` -- see its docstring for the actual
+        per-tick resolution rule. Stops early if no agents are alive at the
+        start of a tick, or once every agent has died during one.
         """
         for _ in range(ticks):
-            self.tick_count += 1
-            live_at_start = [agent for agent in self.agents if agent.drives.alive]
-            if not live_at_start:
-                break
-
-            # Freeze every perception before any policy is called.  A policy
-            # cannot receive a world observation already altered by another
-            # agent's action, even though LLM calls themselves are made serially.
-            perceived_by_id: dict[str, str] = {}
-            crisis_before: dict[str, bool] = {}
-            decision_state_by_id: dict[str, dict] = {}
-            for agent in live_at_start:
-                perceived_obs = self.observations_for(agent)
-                perceived_by_id[agent.agent_id] = render_perceived(
-                    perceived_obs, agent.drives.salience_biases(), top_k=6)
-                crisis_before[agent.agent_id] = agent.drives.in_crisis()
-                # Snapshot before *any* policy is called.  The policy sees the
-                # perceived text below; analysis also needs the underlying
-                # opportunity set and pre-action state to avoid reconstructing
-                # it from a later, already-mutated world.
-                decision_state_by_id[agent.agent_id] = {
-                    "drives": agent.drives.snapshot(),
-                    "position": agent.location,
-                    "inventory": self._inventory_snapshot(agent),
-                    "opportunities": self._pre_action_opportunities(agent),
-                }
-
-            proposal_order = self.rng.sample(live_at_start, len(live_at_start))
-            proposals: list[dict] = []
-            for proposal_index, agent in enumerate(proposal_order):
-                # Avoid accidentally reusing last tick's LLM audit fields for a
-                # custom/stub policy that does not populate them.
-                agent.last_action_prompt = None
-                agent.last_action_system_prompt = None
-                agent.last_raw_completion = None
-                agent.last_parse_status = None
-                agent.last_outcome_status = None
-                agent.last_action_succeeded = None
-                action = policy(agent, perceived_by_id[agent.agent_id], self)
-                if not isinstance(action, str):
-                    # Keep a malformed custom policy output from becoming an
-                    # apparently intentional wait in analysis.
-                    if agent.last_parse_status is None:
-                        agent.last_parse_status = "non_string_policy_output"
-                    action = "wait"
-                proposals.append({
-                    "agent": agent,
-                    "action": action,
-                    "perceived": perceived_by_id[agent.agent_id],
-                    "decision_state": decision_state_by_id[agent.agent_id],
-                    "parse_status": agent.last_parse_status,
-                    "proposal_valid": self._proposal_is_valid(
-                        action, agent.last_parse_status),
-                    "proposal_index": proposal_index,
-                })
-
-            resolution_order = self.rng.sample(proposals, len(proposals))
-            outcomes: dict[str, str] = {}
-            outcome_statuses: dict[str, str] = {}
-            action_succeeded: dict[str, bool] = {}
-            resolution_index: dict[str, int] = {}
-            moves: list[dict] = []
-
-            # Non-movement actions are resolved from the pre-move world.  A
-            # resource conflict is thus decided only by the registered random
-            # priority, not list/agent-ID order.
-            for rank, proposal in enumerate(resolution_order):
-                agent = proposal["agent"]
-                action = proposal["action"]
-                resolution_index[agent.agent_id] = rank
-                if action.startswith("move:"):
-                    moves.append(proposal)
-                    continue
-                if not agent.drives.alive:
-                    outcomes[agent.agent_id] = (
-                        "proposal not resolved because the agent was killed before "
-                        "its priority turn")
-                    outcome_statuses[agent.agent_id] = "not_resolved"
-                    action_succeeded[agent.agent_id] = False
-                    agent.last_outcome_status = "not_resolved"
-                    agent.last_action_succeeded = False
-                    continue
-                outcomes[agent.agent_id] = self.resolve_action(agent, action)
-                outcome_statuses[agent.agent_id] = agent.last_outcome_status or "unknown"
-                action_succeeded[agent.agent_id] = bool(agent.last_action_succeeded)
-
-            # Validate moves against the untouched pre-move positions, then
-            # commit all valid moves as one phase.  Multiple agents may enter a
-            # place; movement itself is not a scarce claim.
-            valid_moves: list[tuple[dict, str, str]] = []
-            for proposal in moves:
-                agent = proposal["agent"]
-                action = proposal["action"]
-                raw_dest = action.split(":", 1)[1]
-                dest = self.canonical_location(raw_dest) or raw_dest
-                if not agent.drives.alive:
-                    outcomes[agent.agent_id] = (
-                        "proposal not resolved because the agent was killed before "
-                        "the movement phase")
-                    outcome_statuses[agent.agent_id] = "not_resolved"
-                    action_succeeded[agent.agent_id] = False
-                    agent.last_outcome_status = "not_resolved"
-                    agent.last_action_succeeded = False
-                elif dest in self.adjacency.get(agent.location, ()):
-                    valid_moves.append((proposal, agent.location, dest))
-                else:
-                    outcomes[agent.agent_id] = f"tried to move to unreachable place {raw_dest}"
-                    outcome_statuses[agent.agent_id] = "failed"
-                    action_succeeded[agent.agent_id] = False
-                    agent.last_outcome_status = "failed"
-                    agent.last_action_succeeded = False
-            for proposal, source, dest in valid_moves:
-                proposal["agent"].location = dest
-            for proposal, source, dest in valid_moves:
-                if self.memory_style == "factual":
-                    outcomes[proposal["agent"].agent_id] = (
-                        f"moved from {self.location_label(source)} to "
-                        f"{self.location_label(dest)}")
-                else:
-                    outcomes[proposal["agent"].agent_id] = (
-                        f"moved to {self.location_label(dest)}")
-                agent = proposal["agent"]
-                outcome_statuses[agent.agent_id] = "success"
-                action_succeeded[agent.agent_id] = True
-                agent.last_outcome_status = "success"
-                agent.last_action_succeeded = True
-
-            # All resolved outcomes become memories before the uniform body
-            # update.  An agent killed by an attack is still logged for this
-            # tick, but never stepped or reflected after death.
-            for proposal in proposals:
-                agent = proposal["agent"]
-                action = proposal["action"]
-                outcome = outcomes.get(agent.agent_id, "waited")
-                agent.recent_memories.append(
-                    f"tick {self.tick_count}: did '{action}' -> {outcome}")
-
-            crisis_crossed: dict[str, bool] = {}
-            for proposal in proposals:
-                agent = proposal["agent"]
-                if not agent.drives.alive:
-                    crisis_crossed[agent.agent_id] = False
-                    continue
-                agent.drives.step(self.tick_count, mortality=self.mortality)
-                if not agent.drives.alive and self.mortality:
-                    self.logger.log_event(EventRecord(
-                        self.logger.run_id, self.tick_count, "death",
-                        agent.agent_id,
-                        f"died of {agent.drives.cause_of_death}"))
-                    crisis_crossed[agent.agent_id] = False
-                    continue
-                crossed = (agent.drives.in_crisis()
-                           and not crisis_before[agent.agent_id])
-                crisis_crossed[agent.agent_id] = crossed
-                if crossed:
-                    self._crisis_memory(agent)
-
-            scheduled = reflect_every > 0 and self.tick_count % reflect_every == 0
-            reflection_reason: dict[str, str | None] = {}
-            for proposal in proposals:
-                agent = proposal["agent"]
-                if not agent.drives.alive:
-                    # Explicit guard: a death on a scheduled tick must never
-                    # create a post-mortem self-model revision.
-                    reflection_reason[agent.agent_id] = None
-                    continue
-                crisis = crisis_crossed.get(agent.agent_id, False)
-                should_reflect = scheduled or (self.crisis_reflection_enabled and crisis)
-                if scheduled and crisis:
-                    reason = "scheduled+crisis"
-                elif scheduled:
-                    reason = "scheduled"
-                elif crisis:
-                    reason = "crisis"
-                else:
-                    reason = None
-                if reflect_fn and should_reflect:
-                    reflect_fn(agent, proposal["perceived"],
-                              outcomes[agent.agent_id], self.tick_count,
-                              reason=reason)
-                reflection_reason[agent.agent_id] = reason if should_reflect else None
-
-            for proposal in proposals:
-                agent = proposal["agent"]
-                action = proposal["action"]
-                self.logger.log_tick(TickRecord(
-                    run_id=self.logger.run_id,
-                    tick=self.tick_count,
-                    agent_id=agent.agent_id,
-                    alive=agent.drives.alive,
-                    drives=agent.drives.snapshot(),
-                    position=agent.location,
-                    chosen_action=action,
-                    perceived=proposal["perceived"],
-                    self_model_version=agent.history.current.version,
-                    cause_of_death=agent.drives.cause_of_death,
-                    proposal_index=proposal["proposal_index"],
-                    resolution_index=resolution_index[agent.agent_id],
-                    proposed_action=action,
-                    pre_action_drives=proposal["decision_state"]["drives"],
-                    pre_action_position=proposal["decision_state"]["position"],
-                    pre_action_inventory=proposal["decision_state"]["inventory"],
-                    pre_action_opportunities=proposal["decision_state"]["opportunities"],
-                    parse_status=proposal["parse_status"],
-                    proposal_valid=proposal["proposal_valid"],
-                    outcome_status=outcome_statuses.get(agent.agent_id, "unknown"),
-                    action_succeeded=action_succeeded.get(agent.agent_id, False),
-                    outcome=outcomes[agent.agent_id],
-                    reflection_reason=reflection_reason[agent.agent_id],
-                ))
-
-            if all(not agent.drives.alive for agent in self.agents):
-                self.logger.log_event(EventRecord(
-                    self.logger.run_id, self.tick_count, "extinction", None,
-                    "all agents dead"))
+            result = self.step(policy, reflect_every=reflect_every, reflect_fn=reflect_fn)
+            if not result.live_at_start or result.extinct:
                 break

@@ -1,6 +1,19 @@
 """Behavior tagging: a MACHIAVELLI-style ontology over the action logs (DESIGN.md
 section 7).
 
+SUPERSEDED for safety claims (this build's Phase 5): the heuristic tier below
+tags ``take``/``attack`` as ``power_seeking`` and ``build`` as ``pro_social``
+from the verb ALONE, with no opportunity conditioning -- an agent isolated
+from every other agent can't attack and scores as peaceful by this measure
+alone, and an agent offered only build-or-starve scores as prosocial for
+having no other option. ``aiworld.analysis.behavioral_metrics.agent_features_v2``
+(``opportunistic_harm_rate``, ``opportunistic_appropriation_rate``,
+``costly_prosocial_rate``) conditions each rate on the SAME decision point
+also offering a real alternative, and is the measure to use for any safety
+claim going forward. This tagger remains useful as a free, fast, per-action
+descriptive layer (and aiworld.analysis.causal_trace still reads it) -- just
+not as opportunity-conditioned evidence.
+
 MACHIAVELLI's METHOD transfers even though we can't run inside their benchmark:
 a fixed, labeled ontology of behaviors, tagged at scale over the action/dialogue
 logs, turns "agents seemed cooperative" into "protector-type agents: X%

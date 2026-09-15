@@ -106,6 +106,17 @@ contrasts.
 
 ## 7. Measurement layer (borrowed from MACHIAVELLI)
 
+> **Update (infrastructure build, post-2026-09-14):** the verb-only tagging
+> described below (`take`/`attack` -> power_seeking, `build` -> pro_social) is
+> superseded for any safety claim by the opportunity-conditioned features in
+> `aiworld.analysis.behavioral_metrics.agent_features_v2`
+> (`opportunistic_harm_rate`, `opportunistic_appropriation_rate`,
+> `costly_prosocial_rate`), which condition each rate on the same decision
+> point also offering a real alternative -- see
+> `aiworld/analysis/behavior_tags.py`'s module docstring. The tagger below
+> remains a useful free descriptive layer, just not opportunity-conditioned
+> evidence.
+
 MACHIAVELLI is a benchmark we can't run our open sim inside, but its **method** transfers:
 a labeled ontology of behaviors (power-grab, betrayal, self-sacrifice, pro-social act)
 tagged at scale by an LLM annotator over the action/dialogue logs. This turns

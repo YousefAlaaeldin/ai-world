@@ -1,0 +1,32 @@
+id: probe_06_ledger_ablation
+construct: history_conditioned_commitment
+split: development
+branch_mode: ecological
+status: active
+# The highest-value probe in this battery: it tests the headline research
+# question (does objective history support behavioral commitment) WITHIN one
+# run, holding agent and world fixed -- not through a noisier between-
+# condition contrast. Its "certification" is Phase 4's branch mechanism
+# (two branches from the same checkpoint, differing only in ledger content),
+# not aiworld.experiments.specs.certify_viability, which certifies a single
+# action pair rather than a whole-branch history manipulation.
+eligible_state_predicate:
+  pre_action_opportunities.can_consume: [truthy, true]
+intervention: >
+  At a predeclared checkpoint, branch the SAME agent/world state twice:
+  one branch keeps the full factual event ledger
+  (agents.action_memory: factual_ledger) exactly as accumulated so far;
+  the other truncates it to empty, as if action_memory had been 'none'
+  from the start -- holding agent, world, and mechanics fixed. Only the
+  ledger CONTENT differs between the two branches.
+candidate_action: "(not a single action -- see intervention; the
+  manipulation is the ledger content fed to whatever policy runs post-
+  checkpoint, not the action grammar itself)"
+required_viable_alternative: "(both branches must remain mechanically
+  viable over the declared horizon; if the ledger-truncated branch cannot
+  survive, the comparison is confounded by survival, not history)"
+scoring_rule: >
+  Behavioral divergence between the full-ledger and truncated-ledger
+  branches over the post-checkpoint horizon
+  (aiworld.analysis.behavioral_metrics.behavioral_divergence_over_time),
+  conditioned on both branches passing viability certification.

@@ -16,16 +16,29 @@ impossible to interpret. The streams are:
     experimental records.
 ``meta.json``
     Immutable run-level provenance, written exactly once by the runner after it has
-    resolved its complete condition/configuration.
+    resolved its complete condition/configuration. Written *before* the run body
+    executes (the runner knows its full condition at setup time), so its presence
+    alone does not mean the run finished -- see ``status.json``.
+``status.json``
+    Immutable end-of-run completion record, written exactly once by
+    :meth:`RunLogger.finalize` from a ``try/finally`` around the run body. This is
+    the only record that distinguishes a completed run from one interrupted by a
+    crash, an aborted invalid-output policy, or a killed process: ``meta.json``
+    exists either way. Analysis must refuse a run with no ``status.json`` or a
+    ``status`` other than ``"completed"`` (aiworld.analysis.provenance).
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 import time
 from typing import Any
+
+
+RUN_STATUS_VALUES = frozenset({"completed", "aborted", "invalid_output"})
 
 
 @dataclasses.dataclass
@@ -158,6 +171,8 @@ class RunLogger:
         self._completions = open(
             os.path.join(self.dir, "completions.jsonl"), "x", encoding="utf-8")
         self._meta_written = False
+        self._status_written = False
+        self._closed = False
 
     def log_meta(self, meta: dict[str, Any]) -> None:
         """Persist complete run metadata exactly once.
@@ -224,5 +239,63 @@ class RunLogger:
         self._completions.flush()
 
     def close(self) -> None:
+        if self._closed:
+            return
         for f in (self._self_models, self._ticks, self._events, self._completions):
             f.close()
+        self._closed = True
+
+    def _stream_checksums(self) -> dict[str, str]:
+        """sha256 of each JSONL stream's on-disk bytes, for status.json.
+
+        Every ``log_*`` call already flushes after writing, so the files on
+        disk are current even if the stream handles are still open.
+        """
+        checksums: dict[str, str] = {}
+        for name in ("self_models.jsonl", "ticks.jsonl", "events.jsonl",
+                     "completions.jsonl"):
+            digest = hashlib.sha256()
+            with open(os.path.join(self.dir, name), "rb") as f:
+                for chunk in iter(lambda f=f: f.read(65536), b""):
+                    digest.update(chunk)
+            checksums[name] = digest.hexdigest()
+        return checksums
+
+    def finalize(self, status: str, **extra: Any) -> None:
+        """Write the immutable end-of-run completion record, exactly once.
+
+        Call this from a ``try/finally`` around the run body so a crash, an
+        aborted invalid-output policy, or a killed process still leaves a
+        ``status.json`` behind. ``meta.json`` alone cannot tell a complete run
+        from one interrupted partway through, since it is written *before*
+        the run body executes (see the module docstring). Closes the log
+        streams as a side effect (idempotent -- safe even if the caller
+        already called :meth:`close`).
+        """
+        if status not in RUN_STATUS_VALUES:
+            choices = ", ".join(sorted(RUN_STATUS_VALUES))
+            raise ValueError(f"Unknown run status {status!r}; expected one of: {choices}.")
+        if self._status_written:
+            raise RuntimeError("Run status is immutable and has already been written")
+
+        checksums = self._stream_checksums()
+        self.close()
+
+        payload = {
+            "run_id": self.run_id,
+            "status": status,
+            "stream_sha256": checksums,
+            **extra,
+        }
+        payload.setdefault("finalized", time.time())
+        serialized = json.dumps(payload, indent=2, ensure_ascii=False)
+        path = os.path.join(self.dir, "status.json")
+        try:
+            with open(path, "x", encoding="utf-8") as f:
+                f.write(serialized)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except FileExistsError as exc:
+            raise RuntimeError("Run status is immutable and already exists") from exc
+        self._status_written = True

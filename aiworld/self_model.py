@@ -74,6 +74,20 @@ class SelfModel:
             f"What I want now: {want}"
         )
 
+    def as_summary_prompt_block(self) -> str:
+        """Non-identity rendering for the self-narrative CONTROL treatment
+        (this build's Phase 7): shows only a plain factual summary under a
+        neutral label -- never "Who I am" / "What matters" / "What I want
+        now". Repurposes ``what_i_want_now`` purely as the summary text's
+        storage slot; ``who_i_am``/``what_matters`` stay blank and unused
+        under this treatment. Pairs with
+        ``aiworld.components.self_model_component.NON_IDENTITY_SUMMARY_PROMPT``,
+        which is the only reflection template that writes into this field
+        under this rendering.
+        """
+        summary = self.what_i_want_now.strip() or "(nothing notable recorded yet)"
+        return f"Recent summary: {summary}"
+
     def revise(
         self,
         *,

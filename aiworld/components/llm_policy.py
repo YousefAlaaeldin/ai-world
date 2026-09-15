@@ -171,12 +171,20 @@ def _build_action_prompt(
     action_memory: str = ACTION_MEMORY_NONE,
     action_memory_max_events: int = DEFAULT_ACTION_MEMORY_MAX_EVENTS,
     action_context_max_chars: int = DEFAULT_ACTION_CONTEXT_MAX_CHARS,
+    self_narrative_control: bool = False,
 ) -> str:
     """Build one action prompt with an explicitly assigned context treatment.
 
     ``show_self_model`` and ``action_memory`` are deliberately separate.  A
     factual ledger supplies observed event history, not a self-description; the
     condition cannot silently gain identity language by turning memory on.
+
+    ``self_narrative_control`` (Phase 7's non-identity summary control):
+    when ``show_self_model`` is also true, renders
+    ``agent.history.current.as_summary_prompt_block()`` (a neutral "Recent
+    summary: ..." line) instead of the identity-framed
+    ``as_prompt_block()`` -- same extra reflection call and context length
+    as the self-narrative arm, no identity content.
     """
     _validate_action_memory_mode(action_memory)
     _validate_context_bounds(action_memory_max_events, action_context_max_chars)
@@ -196,8 +204,11 @@ def _build_action_prompt(
     # its own prior self-description can't steer the next action.  The factual
     # ledger is a distinct treatment: it contains no identity fields and is
     # bounded by the same declared dynamic-context cap.
+    self_model_text = (agent.history.current.as_summary_prompt_block()
+                       if self_narrative_control
+                       else agent.history.current.as_prompt_block())
     self_block = (
-        f"{_bounded_context(agent.history.current.as_prompt_block(), action_context_max_chars)}\n\n"
+        f"{_bounded_context(self_model_text, action_context_max_chars)}\n\n"
         if show_self_model else ""
     )
     ledger_block = (
@@ -269,7 +280,8 @@ def make_llm_policy(client: LLMClient, vocabulary: str = "neutral",
                     show_self_model: bool = True,
                     action_memory: str = ACTION_MEMORY_NONE,
                     action_memory_max_events: int = DEFAULT_ACTION_MEMORY_MAX_EVENTS,
-                    action_context_max_chars: int = DEFAULT_ACTION_CONTEXT_MAX_CHARS):
+                    action_context_max_chars: int = DEFAULT_ACTION_CONTEXT_MAX_CHARS,
+                    self_narrative_control: bool = False):
     """Return a policy(agent, perceived, world) -> action_str backed by the model.
 
     Condition knobs (docs/REDESIGN_PLAN.md):
@@ -279,6 +291,9 @@ def make_llm_policy(client: LLMClient, vocabulary: str = "neutral",
       action_memory    'none' | 'factual_ledger'; observed history, never identity
       action_memory_max_events / action_context_max_chars
                        declared bounds on persistent action context
+      self_narrative_control
+                       Phase 7's non-identity summary control -- see
+                       _build_action_prompt's docstring.
     Defaults reproduce the original primed arm.
     """
     _validate_action_memory_mode(action_memory)
@@ -290,7 +305,8 @@ def make_llm_policy(client: LLMClient, vocabulary: str = "neutral",
                                       show_self_model=show_self_model,
                                       action_memory=action_memory,
                                       action_memory_max_events=action_memory_max_events,
-                                      action_context_max_chars=action_context_max_chars)
+                                      action_context_max_chars=action_context_max_chars,
+                                      self_narrative_control=self_narrative_control)
         raw = client.complete(prompt, system=system_prompt)
         action, status = parse_action_diagnostic(raw, world, agent)
         # World.run emits the structural per-tick trace.  Retaining the full

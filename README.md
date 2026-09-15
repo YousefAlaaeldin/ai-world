@@ -21,6 +21,28 @@ This is a research platform and pilot protocol, not a completed study. There are
 live multi-seed LLM results in the workspace. Passing mechanics tests make a future
 run auditable; they do not constitute a research finding.
 
+### Infrastructure build (Phases 0–9, excluding the live-model pilot)
+
+Everything below is stub/fake-policy and unit-test only (no live LLM calls
+anywhere in this build) — see each module's docstring for the full rationale.
+
+| Phase | What | Status |
+|---|---|---|
+| 0 | Run integrity: `RunLogger.finalize`/`status.json`, per-call `SeedPlan`, the static-sampling-null seed fix (`aiworld/seed_plan.py`, `aiworld/provenance.py`, `aiworld/analysis/provenance.py`) | done |
+| 1 | `World.snapshot()` / `World.from_snapshot()` / `World.step()` (`aiworld/sim/snapshot.py`) | done |
+| 2 | Held-out map/probe specs + mechanical viability certification (`aiworld/experiments/specs.py`, `configs/maps/`, `configs/probes/`) | probe families 1/3/6 implemented; 2/4/5/7 spec-only (deferred) |
+| 3 | Strict-choice menu interface — probe/branch decision points only, never the primary open-world condition (`aiworld/actions.py`) | done; menu covers the existing canonical action grammar only (no parameterized atomic actions like `consume:node:hunger` — would require extending `World._resolve_action`, out of scope) |
+| 4 | Branch perturbation runner, budget-capped (`aiworld/experiments/branches.py`, `scripts/run_branches.py`) | 4 of 6 branch types implemented (`sham`, `means_obstacle`, `cost_tradeoff`, `ledger_ablation`); `irrelevant_perturbation`/`graded_survival_stress` deferred |
+| 5 | Opportunity-conditioned safety metrics, superseding verb-only tagging for safety claims (`aiworld.analysis.behavioral_metrics.agent_features_v2`, `aiworld/analysis/commitment_metrics.py`); per-condition attrition reporting | done |
+| 6 | Pre-registered analysis plan + inter-rater protocol (`docs/ANALYSIS_PLAN_TEMPLATE.md`, `aiworld/analysis/interrater.py`) | done; power analysis (`docs/POWER_ANALYSIS.md`) blocked on pilot variance |
+| 7 | Locked 2×2 condition matrix + non-identity summary control (`configs/experiment_open_world_2x2/`, `configs/experiment_self_narrative_control.yaml`, `aiworld.config.validate_paired_configs`) | done |
+| 8 | Pinned second model family for cross-family replication (`configs/models.example.yaml`: Qwen2.5-14B-Instruct via Ollama, `aiworld/model_spec.py`) | done |
+| 9 | External MACHIAVELLI benchmark integration | deferred, doc-only (`docs/ROADMAP.md`) |
+| 0.5 | Live-model feasibility pilot | **excluded from this build** (competing GPU/CPU load); required before treating any of the above as validated against a real model |
+
+See `docs/ROADMAP.md`'s "Phase 5 — Infrastructure build" section for the
+full breakdown and what's still required before a stronger commitment claim.
+
 ## Layout
 
 ```

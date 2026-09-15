@@ -1,0 +1,66 @@
+# PRIMARY 2x2 OPEN-WORLD FACTORIAL (this build's Phase 7) -- cell: mortality ON, scarcity LOW.
+#
+# Pairs with the other three files in this directory to isolate mortality and
+# scarcity as single factors. All four share identical world topology, agent
+# count, drives, reflection (off), communication, and seeds -- only
+# world.mortality and the four resource quantities differ across the set.
+# Use aiworld.config.validate_paired_configs(cfg_a, cfg_b, declared_factor) to
+# confirm any two differ only in the intended factor before comparing them
+# (docs/ANALYSIS_PLAN_TEMPLATE.md).
+
+experiment_name: open_world_2x2_mortality_on_scarcity_low
+description: >
+  2x2 cell: mortality on, scarcity low (abundant resources). No directive, no
+  self-model feedback, factual event ledger -- same primary-condition arm as
+  experiment_factual_memory_unassigned.yaml, varied along mortality/scarcity.
+
+world:
+  locations: [north, south, east, west, center]
+  edges:
+    - [north, center]
+    - [south, center]
+    - [east, center]
+    - [west, center]
+  resources:
+    - {location: north, drive: hunger, quantity: 30}
+    - {location: south, drive: thirst, quantity: 30}
+    - {location: east,  drive: hunger, quantity: 15}
+    - {location: west,  drive: thirst, quantity: 15}
+  mortality: true
+  vocabulary: neutral
+  memory_style: factual
+  resource_map_mode: counterbalanced
+  randomize_opaque_labels: true
+
+agents:
+  count: 6
+  start_mode: balanced
+  show_self_model: false
+  directive: null
+  action_memory: factual_ledger
+  action_memory_max_events: 12
+  action_context_max_chars: 1200
+
+drives:
+  hunger:      {decay_per_tick: 0.05, replenish_amount: 0.6, lethal: true}
+  thirst:      {decay_per_tick: 0.08, replenish_amount: 0.7, lethal: true}
+  affiliation: {decay_per_tick: 0.03, replenish_amount: 0.4, lethal: false}
+
+reflection:
+  every_n_ticks: 5
+  enabled: false
+  crisis_triggered: false
+  prompt: flat
+
+communication:
+  mode: none
+
+run:
+  ticks: 40
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+  model: null
+
+confound_controls:
+  vary_reflection_prompt: false
+  flat_control: false
+  cross_model: false

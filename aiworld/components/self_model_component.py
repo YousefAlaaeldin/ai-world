@@ -51,6 +51,46 @@ LEADING_REVISION_PROMPT = (
 )
 
 
+# Non-identity summary control (this build's Phase 7, docs/ANALYSIS_PLAN_TEMPLATE.md):
+# same extra reflection call and context length as the self-narrative arm's
+# FLAT_REVISION_PROMPT, but asks for plain factual events, never identity
+# content -- isolates whether "identity feedback" or merely "more generated
+# context" drives any behavioral difference from the factual-ledger arm.
+NON_IDENTITY_SUMMARY_PROMPT = (
+    "Write a plain factual summary of what has happened recently, in "
+    "exactly one or two sentences -- events only, not who you are, what "
+    "you want, or what matters to you.\n\n"
+    "What has happened so far:\n{self_model}\n\n"
+    "New things you have experienced:\n{recent_memories}\n\n"
+    "{bodily_state}\n\n"
+    "Respond with exactly one line:\n"
+    "Summary: ..."
+)
+
+
+def parse_non_identity_summary_diagnostic(text: str, previous: SelfModel, tick: int,
+                                          triggering_event: str) -> tuple[SelfModel, str]:
+    """Parse the non-identity control's one-line response into a revision
+    that reuses ``what_i_want_now`` purely as the summary text's storage
+    slot (``who_i_am``/``what_matters`` stay blank) -- see
+    ``SelfModel.as_summary_prompt_block``. Falls back to the previous
+    summary if the line is missing, matching :func:`parse_revision_diagnostic`'s
+    discipline of never wiping content on a malformed generation.
+    """
+    summary = previous.what_i_want_now
+    found = False
+    for line in text.splitlines():
+        low = line.lower().strip()
+        if low.startswith("summary:"):
+            summary = line.split(":", 1)[1].strip()
+            found = True
+            break
+    status = "ok" if found else "invalid_format"
+    return previous.revise(
+        who_i_am="", what_matters="", what_i_want_now=summary,
+        tick=tick, triggering_event=triggering_event), status
+
+
 def parse_revision_diagnostic(text: str, previous: SelfModel, tick: int,
                               triggering_event: str) -> tuple[SelfModel, str]:
     """Parse the model's three-line response into a new SelfModel version.
@@ -92,6 +132,8 @@ def make_reflect_fn(
     prompt_template: str = FLAT_REVISION_PROMPT,
     recent_memories_fn: Callable | None = None,
     completion_observer: Callable[[dict], None] | None = None,
+    render_self_model_fn: Callable[[SelfModel], str] | None = None,
+    parse_fn: Callable[[str, SelfModel, int, str], tuple[SelfModel, str]] | None = None,
 ):
     """Build a reflect_fn compatible with World.run(...).
 
@@ -99,7 +141,17 @@ def make_reflect_fn(
     llm_client.LLMClient.complete). We inject it rather than importing a specific
     backend so the same code runs against any model family — which is exactly
     what the cross-model confound check needs.
+
+    ``render_self_model_fn``/``parse_fn`` default to the identity-framed
+    ``SelfModel.as_prompt_block``/:func:`parse_revision_diagnostic` pair
+    (unchanged prior behavior). Pass
+    ``SelfModel.as_summary_prompt_block``/:func:`parse_non_identity_summary_diagnostic`
+    together with ``prompt_template=NON_IDENTITY_SUMMARY_PROMPT`` for the
+    Phase 7 non-identity summary control.
     """
+    render_self_model_fn = render_self_model_fn or (
+        lambda self_model: self_model.as_prompt_block())
+    parse_fn = parse_fn or parse_revision_diagnostic
 
     def reflect(agent, perceived: str, outcome: str, tick: int,
                reason: str = "scheduled") -> None:
@@ -110,7 +162,7 @@ def make_reflect_fn(
         else:
             recent = outcome  # minimal: last outcome as the memory
         prompt = prompt_template.format(
-            self_model=hist.current.as_prompt_block(),
+            self_model=render_self_model_fn(hist.current),
             recent_memories=recent,
             bodily_state=agent.drives.as_prompt_block(),
             perceived=perceived,
@@ -119,7 +171,7 @@ def make_reflect_fn(
         # `reason` ("scheduled" | "crisis", see World.run) rides along in the
         # causal-trace field so an event-triggered reflection is distinguishable
         # from a routine periodic one when reading self_models.jsonl later.
-        new_model, parse_status = parse_revision_diagnostic(
+        new_model, parse_status = parse_fn(
             response, hist.current, tick,
             triggering_event=f"[{reason}] {outcome}")
         if completion_observer is not None:

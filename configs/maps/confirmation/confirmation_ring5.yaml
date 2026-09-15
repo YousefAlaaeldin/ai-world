@@ -1,0 +1,20 @@
+# Confirmation split: a ring, not a hub-and-spoke -- maximally distinct from
+# both dev_hub5 and heldout_hub6. Reserved for a final confirmatory check
+# after held-out results are in; never used during development or as the
+# primary held-out generalization test.
+name: confirmation_ring5
+split: confirmation
+start_mode: balanced
+label_mode: natural
+world:
+  locations: [p1, p2, p3, p4, p5]
+  edges:
+    - [p1, p2]
+    - [p2, p3]
+    - [p3, p4]
+    - [p4, p5]
+    - [p5, p1]
+  resources:
+    - {location: p1, drive: hunger, quantity: 20}
+    - {location: p3, drive: thirst, quantity: 20}
+    - {location: p5, drive: hunger, quantity: 10}

@@ -29,21 +29,20 @@ from aiworld.self_model import SelfModelHistory, SHARED_DIRECTIVE  # noqa: E402
 from aiworld.logging_schema import RunLogger, CompletionRecord  # noqa: E402
 from aiworld.sim.world import World, Agent, agent_recent_memories  # noqa: E402
 from aiworld.llm_client import LLMClient, config_from_env  # noqa: E402
+from aiworld.seed_plan import SeedPlan  # noqa: E402
+from aiworld.provenance import (  # noqa: E402
+    ACTION_API_VERSION, ANALYSIS_SCHEMA_VERSION, git_revision)
+from aiworld.model_spec import DEFAULT_MODEL_REGISTRY_PATH, load_model_spec  # noqa: E402
 from aiworld.components.llm_policy import (  # noqa: E402
     ACTION_MEMORY_FACTUAL_LEDGER, ACTION_MEMORY_MODES,
     DEFAULT_ACTION_CONTEXT_MAX_CHARS, DEFAULT_ACTION_MEMORY_MAX_EVENTS,
     make_llm_policy, _action_system_prompt)
 from aiworld.components.self_model_component import (  # noqa: E402
-    make_reflect_fn, FLAT_REVISION_PROMPT, LEADING_REVISION_PROMPT)
+    make_reflect_fn, FLAT_REVISION_PROMPT, LEADING_REVISION_PROMPT,
+    NON_IDENTITY_SUMMARY_PROMPT, parse_non_identity_summary_diagnostic)
 from aiworld.config import (  # noqa: E402
     load_config, drive_specs_from_config, initial_locations, adjacency_from_config,
     resource_map_from_config)
-
-
-def _derived_seed(run_seed: int, stream: str) -> int:
-    """Make independent, reproducible RNG streams from a declared run seed."""
-    payload = f"aiworld:{run_seed}:{stream}".encode("utf-8")
-    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
 
 
 def build_world(cfg, run_id, n_agents, seed, mortality, vocabulary="neutral",
@@ -52,9 +51,10 @@ def build_world(cfg, run_id, n_agents, seed, mortality, vocabulary="neutral",
     # Keep map/start allocation independent of action conflict resolution.  A
     # later change in one setup draw must not silently alter the random-priority
     # sequence that resolves otherwise-identical action proposals.
-    map_seed = _derived_seed(seed, "resource_map")
-    start_seed = _derived_seed(seed, "initial_locations")
-    world_seed = _derived_seed(seed, "presentation_and_resolution")
+    seed_plan = SeedPlan(run_seed=seed)
+    map_seed = seed_plan.seed_for("resource_map")
+    start_seed = seed_plan.seed_for("initial_locations")
+    world_seed = seed_plan.seed_for("presentation_and_resolution")
     map_rng = random.Random(map_seed)
     start_rng = random.Random(start_seed)
     world_rng = random.Random(world_seed)
@@ -131,6 +131,12 @@ def main():
                          "curated-framing default; factual is a plain event ledger "
                          "with no 'nearly died'/'rescued'-style narrative loading)")
     ap.add_argument("--immortal", action="store_true")
+    ap.add_argument("--model-spec", default=None,
+                    help="name of a ModelSpec in --model-registry to record in "
+                         "provenance (aiworld/model_spec.py); optional, purely "
+                         "additive metadata -- omit to keep today's behavior")
+    ap.add_argument("--model-registry", default=DEFAULT_MODEL_REGISTRY_PATH,
+                    help="path to the ModelSpec registry YAML")
     args = ap.parse_args()
 
     exp_cfg = load_config(args.config)
@@ -156,6 +162,11 @@ def main():
         "action_memory_max_events", DEFAULT_ACTION_MEMORY_MAX_EVENTS)
     action_context_max_chars = agents_cfg.get(
         "action_context_max_chars", DEFAULT_ACTION_CONTEXT_MAX_CHARS)
+    # Phase 7 non-identity summary control: same extra reflection call and
+    # context length as the self-narrative arm, but neutral factual content
+    # (aiworld.components.self_model_component.NON_IDENTITY_SUMMARY_PROMPT)
+    # instead of "Who I am / What matters / What I want now".
+    self_narrative_control = agents_cfg.get("self_narrative_control", False)
     reflection_enabled = exp_cfg["reflection"].get("enabled", True)
 
     if action_memory not in ACTION_MEMORY_MODES:
@@ -198,6 +209,7 @@ def main():
     resolved_agents["action_memory"] = action_memory
     resolved_agents["action_memory_max_events"] = action_memory_max_events
     resolved_agents["action_context_max_chars"] = action_context_max_chars
+    resolved_agents["self_narrative_control"] = self_narrative_control
     resolved_cfg.setdefault("world", {})["mortality"] = mortality
     resolved_cfg["world"]["vocabulary"] = vocabulary
     resolved_cfg["world"]["memory_style"] = memory_style
@@ -210,8 +222,10 @@ def main():
 
     action_system_prompt = _action_system_prompt(
         vocabulary, directive, show_self_model)
-    reflection_template = (FLAT_REVISION_PROMPT if prompt_choice == "flat"
-                           else LEADING_REVISION_PROMPT)
+    reflection_template = (
+        NON_IDENTITY_SUMMARY_PROMPT if self_narrative_control
+        else FLAT_REVISION_PROMPT if prompt_choice == "flat"
+        else LEADING_REVISION_PROMPT)
     world, setup = build_world(resolved_cfg, args.run_id, n_agents, args.seed,
                                mortality=mortality, vocabulary=vocabulary,
                                memory_style=memory_style,
@@ -223,10 +237,12 @@ def main():
         "action_memory": action_memory,
         "action_memory_max_events": action_memory_max_events,
         "action_context_max_chars": action_context_max_chars,
+        "self_narrative_control": self_narrative_control,
         "world_memory_style": memory_style,
         "vocabulary": vocabulary,
         "reflection_enabled": reflection_enabled,
-        "reflection_prompt": prompt_choice if reflection_enabled else None,
+        "reflection_prompt": ("non_identity_summary" if self_narrative_control
+                              else prompt_choice if reflection_enabled else None),
         "communication_mode": world.communication_mode,
         "crisis_reflection_enabled": world.crisis_reflection_enabled,
     }
@@ -245,13 +261,18 @@ def main():
             "reflection_template": reflection_template if reflection_enabled else None,
         },
         "llm": client.request_metadata(),
+        "action_api_version": ACTION_API_VERSION,
+        "analysis_schema_version": ANALYSIS_SCHEMA_VERSION,
+        "model_spec": (load_model_spec(args.model_spec, path=args.model_registry).to_dict()
+                      if args.model_spec else None),
         **setup,
     })
     policy = make_llm_policy(client, vocabulary=vocabulary, directive=directive,
                              show_self_model=show_self_model,
                              action_memory=action_memory,
                              action_memory_max_events=action_memory_max_events,
-                             action_context_max_chars=action_context_max_chars)
+                             action_context_max_chars=action_context_max_chars,
+                             self_narrative_control=self_narrative_control)
 
     reflect = None
     if reflection_enabled:
@@ -279,15 +300,34 @@ def main():
             prompt_template=reflection_template,
             recent_memories_fn=agent_recent_memories,
             completion_observer=log_reflection_completion,
+            render_self_model_fn=(
+                (lambda self_model: self_model.as_summary_prompt_block())
+                if self_narrative_control else None),
+            parse_fn=(parse_non_identity_summary_diagnostic
+                     if self_narrative_control else None),
         )
 
     # Log every agent's identical starting self-model as version 0.
     for a in world.agents:
         world.logger.log_self_model(a.agent_id, a.history.current.to_dict())
 
-    world.run(policy, ticks=ticks,
-              reflect_every=reflect_every, reflect_fn=reflect)
-    world.logger.close()
+    status, error = "completed", None
+    try:
+        world.run(policy, ticks=ticks,
+                 reflect_every=reflect_every, reflect_fn=reflect)
+    except Exception as exc:
+        status, error = "aborted", str(exc)
+        raise
+    finally:
+        world.logger.finalize(
+            status=status,
+            expected_ticks=ticks,
+            observed_ticks=world.tick_count,
+            action_api_version=ACTION_API_VERSION,
+            analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
+            git_revision=git_revision(),
+            error=error,
+        )
 
     alive = sum(1 for a in world.agents if a.drives.alive)
     print(f"Run '{args.run_id}' done. {alive}/{n_agents} alive. "

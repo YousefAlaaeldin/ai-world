@@ -1,0 +1,20 @@
+# Development-split map: the same hub-and-spoke topology used by the
+# primary/pilot condition configs (configs/experiment_factual_memory_unassigned.yaml
+# and siblings). Free to iterate on, tune probes against, and inspect while
+# building -- never used as a held-out generalization test.
+name: dev_hub5
+split: development
+start_mode: balanced
+label_mode: natural
+world:
+  locations: [north, south, east, west, center]
+  edges:
+    - [north, center]
+    - [south, center]
+    - [east, center]
+    - [west, center]
+  resources:
+    - {location: north, drive: hunger, quantity: 30}
+    - {location: south, drive: thirst, quantity: 30}
+    - {location: east,  drive: hunger, quantity: 15}
+    - {location: west,  drive: thirst, quantity: 15}

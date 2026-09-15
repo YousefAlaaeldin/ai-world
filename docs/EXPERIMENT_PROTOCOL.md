@@ -90,9 +90,18 @@ A candidate behavioral commitment must satisfy all of the following:
 6. It is replicated with at least one additional pinned model family before any
    general statement about LLMs.
 
-Held-out map/probe and branch-perturbation machinery are still required before
-conditions 3–4 can be claimed. Until then, label results **exploratory behavioral
-heterogeneity**, not stable purpose.
+Held-out map/probe and branch-perturbation machinery now exists
+(`aiworld/experiments/specs.py`, `aiworld/experiments/branches.py`,
+`configs/maps/`, `configs/probes/` — infrastructure build, post-2026-09-14) but
+has never been exercised against a live model: probe families 1
+(retain-vs-transfer), 3 (harm-with-alternative), and 6 (ledger-ablation) have
+real certifier/branch support; families 2, 4, 5, 7 are spec-only and deferred.
+Until a live run produces real held-out/branch results, label results
+**exploratory behavioral heterogeneity**, not stable purpose. See
+`README.md`'s status table and `docs/ROADMAP.md`'s "Phase 5 — Infrastructure
+build" section for the full implemented-vs-deferred breakdown, and
+`docs/ANALYSIS_PLAN_TEMPLATE.md` for the pre-registered statistical method
+this protocol's evidence gates rely on.
 
 ## Analysis discipline
 

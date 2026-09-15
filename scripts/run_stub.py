@@ -24,13 +24,15 @@ from aiworld.self_model import SelfModelHistory  # noqa: E402
 from aiworld.logging_schema import RunLogger  # noqa: E402
 from aiworld.sim.world import World, Agent  # noqa: E402
 from aiworld.sim.stub_policy import make_stub_policy  # noqa: E402
+from aiworld.provenance import (  # noqa: E402
+    ACTION_API_VERSION, ANALYSIS_SCHEMA_VERSION, git_revision)
 from aiworld.config import (  # noqa: E402
     load_config, drive_specs_from_config, initial_locations, adjacency_from_config,
     resource_map_from_config)
 
 
 def build_world(cfg: dict, run_id: str, n_agents: int, seed: int,
-                mortality: bool) -> tuple[World, dict]:
+                mortality: bool, root: str = "runs") -> tuple[World, dict]:
     rng = random.Random(seed)
     locations = cfg["world"]["locations"]
     specs = drive_specs_from_config(cfg)
@@ -52,7 +54,7 @@ def build_world(cfg: dict, run_id: str, n_agents: int, seed: int,
         )
         for i in range(n_agents)
     ]
-    logger = RunLogger(run_id)
+    logger = RunLogger(run_id, root=root)
     world = World(
         locations, resources, agents, logger,
         rng=rng, mortality=mortality, adjacency=adjacency,
@@ -114,12 +116,28 @@ def main():
             "communication_mode": world.communication_mode,
             "crisis_reflection_enabled": world.crisis_reflection_enabled,
         },
+        "action_api_version": ACTION_API_VERSION,
+        "analysis_schema_version": ANALYSIS_SCHEMA_VERSION,
         "note": "Stub policy — mechanics smoke test only, not a result.",
         **setup,
     })
     policy = make_stub_policy(random.Random(args.seed))
-    world.run(policy, ticks=ticks, reflect_every=reflect_every, reflect_fn=None)
-    world.logger.close()
+    status, error = "completed", None
+    try:
+        world.run(policy, ticks=ticks, reflect_every=reflect_every, reflect_fn=None)
+    except Exception as exc:
+        status, error = "aborted", str(exc)
+        raise
+    finally:
+        world.logger.finalize(
+            status=status,
+            expected_ticks=ticks,
+            observed_ticks=world.tick_count,
+            action_api_version=ACTION_API_VERSION,
+            analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
+            git_revision=git_revision(),
+            error=error,
+        )
 
     alive = sum(1 for a in world.agents if a.drives.alive)
     print(f"Run '{args.run_id}' complete: {ticks} ticks, "

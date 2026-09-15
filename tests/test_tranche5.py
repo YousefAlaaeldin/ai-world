@@ -235,8 +235,43 @@ def test_openai_seed_and_action_parse_failure_are_logged(tmp_path, monkeypatch):
     assert client.request_metadata()["sampling_seed_sent"] is True
     assert client.response_metadata()["system_fingerprint"] == "fp-1"
 
+
+def test_per_call_seed_overrides_config_default(monkeypatch):
+    captured = {}
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"id": "cmpl-2", "model": "model-v1",
+                    "choices": [{"finish_reason": "stop", "message": {"content": "wait"}}]}
+
+    def fake_post(url, json, headers, timeout):
+        captured["payload"] = json
+        return Response()
+
+    monkeypatch.setattr("aiworld.llm_client.requests.post", fake_post)
+    client = LLMClient(LLMConfig(base_url="http://example.invalid/v1", model="m",
+                                  sampling_seed=17, max_retries=1))
+
+    client.complete("hello", seed=99)
+    assert captured["payload"]["seed"] == 99  # per-call seed wins over config default
+    assert client.request_metadata()["effective_sampling_seed"] == 99
+    assert client.request_metadata()["sampling_seed_source"] == "call"
+    assert client.config.sampling_seed == 17  # shared config untouched
+
+    client.complete("hello")  # no per-call seed -> falls back to config default
+    assert captured["payload"]["seed"] == 17
+    assert client.request_metadata()["effective_sampling_seed"] == 17
+    assert client.request_metadata()["sampling_seed_source"] == "config"
+
+
+def test_action_parse_failure_is_logged_as_a_data_quality_event(tmp_path):
     class BadClient:
-        def complete(self, prompt, system=None):
+        def complete(self, prompt, system=None, seed=None):
             return "I decline to select an action."
 
         def request_metadata(self):

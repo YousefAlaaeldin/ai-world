@@ -140,7 +140,11 @@ the evidence gates in the canonical protocol are met.
   betrayal, self-sacrifice, pro-social act) over action/dialogue logs. Free
   deterministic heuristic tier by default; `--llm` tier fills in what the heuristic
   can't confidently place. Turns "agents seemed cooperative" into "protector-type
-  agents: X% pro-social vs Y% for hoarder-type."
+  agents: X% pro-social vs Y% for hoarder-type." **Superseded for safety claims**
+  by the opportunity-conditioned features in
+  `aiworld.analysis.behavioral_metrics.agent_features_v2` (infrastructure build,
+  post-2026-09-14) — the verb-only tags above are not conditioned on whether a
+  non-harmful alternative was actually available at the same decision point.
 - All measurement tooling defaults to zero LLM cost (reads JSONL logs directly);
   anything that calls the model is explicit opt-in and always labeled non-authoritative.
 

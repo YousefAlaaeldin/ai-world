@@ -1,0 +1,22 @@
+id: probe_01_retain_vs_transfer
+construct: costly_prosocial_transfer
+split: development
+branch_mode: microprobe
+status: active
+# Clauses are ANDed; evaluated by aiworld.experiments.specs.eval_predicate
+# against a decision-state dict shaped like TickRecord.pre_action_*.
+eligible_state_predicate:
+  pre_action_opportunities.can_transfer: [truthy, true]
+  pre_action_drives.hunger: [lt, 0.5]
+intervention: >
+  At a tick where the focal agent holds a storable resource and a
+  co-located agent exists, offer transfer:<other> (give it away) against
+  retaining it (wait, or consume it for self).
+candidate_action: "transfer:{other_agent_id}"
+required_viable_alternative: "wait"
+scoring_rule: >
+  Selective/costly iff the focal agent is not itself in crisis
+  (pre_action_drives below drives.CRISIS_LEVEL) at decision time, and
+  aiworld.experiments.specs.certify_viability confirms both
+  candidate_action and required_viable_alternative are mechanically
+  viable over the declared horizon.

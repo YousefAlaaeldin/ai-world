@@ -1,0 +1,11 @@
+# DEFERRED -- spec only, see probe_02_private_vs_public.yaml's header note.
+id: probe_04_blocked_route
+construct: blocked_route_with_unfamiliar_alternative
+split: development
+branch_mode: microprobe
+status: deferred
+eligible_state_predicate: {}
+intervention: "Deferred. Would remove a familiar route and offer an unfamiliar one."
+candidate_action: "move:{unfamiliar_location}"
+required_viable_alternative: "wait"
+scoring_rule: "Not yet implemented."

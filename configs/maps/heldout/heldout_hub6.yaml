@@ -1,0 +1,24 @@
+# Held-out split: a genuinely different topology from dev_hub5 (six spokes,
+# not four; different resource layout) -- not a relabeling of the development
+# map. A candidate commitment must predict choices here to satisfy evidence
+# gate #4 (docs/EXPERIMENT_PROTOCOL.md); it must never be touched during
+# development/tuning.
+name: heldout_hub6
+split: heldout
+start_mode: balanced
+label_mode: natural
+world:
+  locations: [n, ne, e, se, s, w, hub]
+  edges:
+    - [n, hub]
+    - [ne, hub]
+    - [e, hub]
+    - [se, hub]
+    - [s, hub]
+    - [w, hub]
+  resources:
+    - {location: n,  drive: hunger, quantity: 20}
+    - {location: ne, drive: thirst, quantity: 20}
+    - {location: e,  drive: hunger, quantity: 10}
+    - {location: s,  drive: thirst, quantity: 10}
+    - {location: w,  drive: hunger, quantity: 10}

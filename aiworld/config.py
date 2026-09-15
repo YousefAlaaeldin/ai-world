@@ -24,6 +24,66 @@ def load_config(path: str) -> dict[str, Any]:
         return yaml.safe_load(f)
 
 
+_PAIRED_CONFIG_IGNORED_TOP_LEVEL_KEYS = frozenset({"experiment_name", "description"})
+
+
+def _flatten_config(cfg: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
+    flat: dict[str, Any] = {}
+    for key, value in cfg.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, Mapping):
+            flat.update(_flatten_config(value, path))
+        else:
+            flat[path] = value
+    return flat
+
+
+def validate_paired_configs(config_a: Mapping[str, Any], config_b: Mapping[str, Any],
+                            declared_factor: str) -> None:
+    """Raise unless two resolved condition configs differ ONLY in
+    ``declared_factor`` (a dotted path, e.g. ``"world.mortality"``; a path
+    naming a sub-tree, e.g. ``"world"``, allows every key beneath it to
+    differ).
+
+    Enforces the "paired configs must differ only in their declared factor"
+    requirement from this build's Phase 7 condition matrix -- a single-factor
+    contrast that quietly also differs in, say, resource quantities or
+    reflection cadence is not actually a single-factor contrast.
+    ``experiment_name``/``description`` are ignored: they are expected to
+    differ between any two named conditions and carry no mechanics.
+    """
+    flat_a = _flatten_config(
+        {k: v for k, v in config_a.items() if k not in _PAIRED_CONFIG_IGNORED_TOP_LEVEL_KEYS})
+    flat_b = _flatten_config(
+        {k: v for k, v in config_b.items() if k not in _PAIRED_CONFIG_IGNORED_TOP_LEVEL_KEYS})
+
+    def _under_factor(key: str) -> bool:
+        return key == declared_factor or key.startswith(declared_factor + ".")
+
+    found = (any(_under_factor(k) for k in flat_a)
+            or any(_under_factor(k) for k in flat_b))
+    if not found:
+        raise ValueError(
+            f"declared_factor {declared_factor!r} was not found in either config."
+        )
+
+    mismatches = []
+    for key in sorted(set(flat_a) | set(flat_b)):
+        if _under_factor(key):
+            continue
+        value_a = flat_a.get(key, "<missing>")
+        value_b = flat_b.get(key, "<missing>")
+        if value_a != value_b:
+            mismatches.append((key, value_a, value_b))
+
+    if mismatches:
+        detail = "; ".join(f"{key}: {a!r} != {b!r}" for key, a, b in mismatches)
+        raise ValueError(
+            f"Paired configs differ in more than the declared factor "
+            f"{declared_factor!r}: {detail}"
+        )
+
+
 def drive_specs_from_config(cfg: dict[str, Any]) -> dict[DriveKind, DriveSpec]:
     specs = {}
     for name, params in cfg["drives"].items():

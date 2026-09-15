@@ -44,6 +44,9 @@ from aiworld.logging_schema import CompletionRecord, TickRecord  # noqa: E402
 from aiworld.salience import render_perceived  # noqa: E402
 from aiworld.config import load_config  # noqa: E402
 from aiworld.self_model import SHARED_DIRECTIVE  # noqa: E402
+from aiworld.seed_plan import SeedPlan  # noqa: E402
+from aiworld.provenance import (  # noqa: E402
+    ACTION_API_VERSION, ANALYSIS_SCHEMA_VERSION, git_revision)
 from scripts.run_llm import build_world, config_digest  # noqa: E402
 
 
@@ -87,6 +90,7 @@ def run_static_sampling(
     action_memory: str = ACTION_MEMORY_NONE,
     action_memory_max_events: int = DEFAULT_ACTION_MEMORY_MAX_EVENTS,
     action_context_max_chars: int = DEFAULT_ACTION_CONTEXT_MAX_CHARS,
+    seed_plan: SeedPlan | None = None,
     on_context_ready: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Log repeated actions from one immutable prompt and return its provenance.
@@ -95,7 +99,18 @@ def run_static_sampling(
     interacting agents and not independent worlds.  The one template agent and
     World are never resolved or stepped; resource quantities, locations, drives,
     inventory, and memory therefore remain fixed across all calls.
+
+    Every draw gets its OWN sampling seed, derived from ``seed_plan`` (one per
+    ``(slot, tick)`` pair). This null's entire point is to measure decoder/model
+    variation under one frozen context -- reusing a single seed across every
+    draw collapses that variation toward degenerate by construction, which
+    would let any nonzero real-condition variation "beat" the null for free
+    (docs/EXPERIMENT_PROTOCOL.md evidence gate #5). ``seed_plan`` defaults to
+    an arbitrary fixed run_seed only for callers that don't care about
+    reproducing a specific draw sequence (e.g. throwaway tests); real runs
+    should always pass one built from the run's declared seed.
     """
+    seed_plan = seed_plan or SeedPlan(run_seed=0)
     if n_slots < 1:
         raise ValueError("n_slots must be at least 1")
     if ticks < 1:
@@ -129,6 +144,7 @@ def run_static_sampling(
         "n_repeats_per_slot": ticks,
         "n_static_action_calls": n_slots * ticks,
         "outcome_status": STATIC_OUTCOME_STATUS,
+        "sampling_seed_mode": "distinct_per_call",
     }
     # Metadata must precede the first model call.  This leaves an immutable,
     # interpretable record even if a provider failure interrupts the null run.
@@ -141,7 +157,8 @@ def run_static_sampling(
         world.tick_count = tick
         for slot in range(n_slots):
             slot_id = f"sample_slot_{slot}"
-            raw = client.complete(prompt, system=system_prompt)
+            call_seed = seed_plan.seed_for("static_sampling", slot=slot, tick=tick)
+            raw = client.complete(prompt, system=system_prompt, seed=call_seed)
             action, parse_status = parse_action_diagnostic(raw, world, template)
             proposal_valid = parse_status == "ok"
             world.logger.log_completion(CompletionRecord(
@@ -199,7 +216,11 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0,
                     help="world/setup seed; match the paired real-condition seed")
     ap.add_argument("--sampling-seed", type=int, default=None,
-                    help="decoder seed; defaults to AIWORLD_SAMPLING_SEED or --seed")
+                    help="base seed for this null's per-call SeedPlan derivation; "
+                         "defaults to AIWORLD_SAMPLING_SEED or --seed. Every draw "
+                         "still gets its OWN distinct derived seed -- this flag "
+                         "only controls reproducibility of that derivation, never "
+                         "a single literal value sent to every call")
     ap.add_argument("--run-id", default="sampling_null",
                     help="immutable output id; reusing one is an error")
     args = ap.parse_args()
@@ -230,10 +251,18 @@ def main() -> None:
         )
 
     llm_cfg = config_from_env()
-    sampling_seed = (args.sampling_seed if args.sampling_seed is not None
-                     else llm_cfg.sampling_seed if llm_cfg.sampling_seed is not None
-                     else args.seed)
-    llm_cfg.sampling_seed = sampling_seed
+    base_sampling_seed = (args.sampling_seed if args.sampling_seed is not None
+                          else llm_cfg.sampling_seed if llm_cfg.sampling_seed is not None
+                          else args.seed)
+    # Every call below passes its own explicit per-call seed
+    # (seed_plan.seed_for(...)), which always overrides this config default.
+    # Leave the config default at None (rather than base_sampling_seed) so
+    # completions.jsonl's per-record "sampling_seed" (config snapshot) never
+    # disagrees with "effective_sampling_seed" (what was actually sent) --
+    # base_sampling_seed only seeds the SeedPlan derivation below, it is
+    # never itself sent to the model.
+    llm_cfg.sampling_seed = None
+    seed_plan = SeedPlan(run_seed=base_sampling_seed)
     client = LLMClient(llm_cfg)
     print(f"Using model '{llm_cfg.model}' at {llm_cfg.base_url} "
           f"(provider={llm_cfg.provider})")
@@ -242,7 +271,7 @@ def main() -> None:
     resolved_cfg.setdefault("agents", {})["count"] = n_slots
     resolved_cfg.setdefault("run", {})["ticks"] = ticks
     resolved_cfg["run"]["seed"] = args.seed
-    resolved_cfg["run"]["sampling_seed"] = sampling_seed
+    resolved_cfg["run"]["sampling_seed"] = base_sampling_seed
     resolved_cfg["run"]["model"] = llm_cfg.model
     resolved_cfg.setdefault("null", {})["mode"] = "static_context_sampling"
     resolved_cfg["null"]["source_config"] = args.config
@@ -259,7 +288,7 @@ def main() -> None:
             "run_id": args.run_id,
             "policy": "static_sampling_null",
             "seed": args.seed,
-            "sampling_seed": sampling_seed,
+            "sampling_seed": base_sampling_seed,
             "mortality": mortality,
             "n_agents": n_slots,
             "condition": condition,
@@ -270,29 +299,51 @@ def main() -> None:
                 "reflection_template": None,
             },
             "llm": client.request_metadata(),
+            "action_api_version": ACTION_API_VERSION,
+            "analysis_schema_version": ANALYSIS_SCHEMA_VERSION,
             "null_interpretation": (
                 "Static-context proposal-only null. It estimates decoder/model variation "
                 "under one frozen initial prompt; it is not realized environmental behavior "
-                "and must not be pooled with world-run action outcomes."
+                "and must not be pooled with world-run action outcomes. Seed fields: this "
+                "record's top-level 'sampling_seed' is only the SeedPlan derivation base -- "
+                "it was never sent to the model. Each draw in completions.jsonl carries its "
+                "own distinct 'effective_sampling_seed' (what was actually sent); the base "
+                "and the per-draw values are expected to differ."
             ),
             **static_provenance,
             **setup,
         })
 
-    static_provenance = run_static_sampling(
-        world=world,
-        client=client,
-        n_slots=n_slots,
-        ticks=ticks,
-        vocabulary=vocabulary,
-        directive=directive,
-        show_self_model=show_self_model,
-        action_memory=condition["action_memory"],
-        action_memory_max_events=condition["action_memory_max_events"],
-        action_context_max_chars=condition["action_context_max_chars"],
-        on_context_ready=log_static_metadata,
-    )
-    world.logger.close()
+    status, error = "completed", None
+    static_provenance = None
+    try:
+        static_provenance = run_static_sampling(
+            world=world,
+            client=client,
+            n_slots=n_slots,
+            ticks=ticks,
+            vocabulary=vocabulary,
+            directive=directive,
+            show_self_model=show_self_model,
+            action_memory=condition["action_memory"],
+            action_memory_max_events=condition["action_memory_max_events"],
+            action_context_max_chars=condition["action_context_max_chars"],
+            seed_plan=seed_plan,
+            on_context_ready=log_static_metadata,
+        )
+    except Exception as exc:
+        status, error = "aborted", str(exc)
+        raise
+    finally:
+        world.logger.finalize(
+            status=status,
+            expected_ticks=ticks,
+            observed_ticks=world.tick_count,
+            action_api_version=ACTION_API_VERSION,
+            analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
+            git_revision=git_revision(),
+            error=error,
+        )
     print(f"Static sampling null '{args.run_id}' done. "
           f"{static_provenance['n_static_action_calls']} frozen-context draws. "
           f"LLM stats: {client.stats()}")

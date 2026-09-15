@@ -53,10 +53,20 @@ class LLMClient:
         self.last_response_metadata: dict[str, Any] = {}
         self._last_transport_metadata: dict[str, Any] = {}
 
-    def complete(self, prompt: str, system: str | None = None) -> str:
+    def complete(self, prompt: str, system: str | None = None,
+                seed: int | None = None) -> str:
+        """Request one completion.
+
+        ``seed`` overrides ``self.config.sampling_seed`` for this call only,
+        without mutating shared config -- the mechanism that lets a caller
+        give every repeated draw from one frozen context its own distinct
+        seed (aiworld.seed_plan.SeedPlan) instead of a decoder-null collapsing
+        onto one reused value. Omit it to keep the previous config-default
+        behavior unchanged.
+        """
         if self.config.provider == "anthropic":
-            return self._complete_anthropic(prompt, system)
-        return self._complete_openai(prompt, system)
+            return self._complete_anthropic(prompt, system, seed)
+        return self._complete_openai(prompt, system, seed)
 
     def request_metadata(self) -> dict[str, Any]:
         """Return safe metadata for the most recent request (never credentials).
@@ -72,31 +82,36 @@ class LLMClient:
         return dict(self.last_response_metadata)
 
     # ---- OpenAI-compatible (Ollama, vLLM, LM Studio, OpenAI, ...) ----
-    def _complete_openai(self, prompt: str, system: str | None) -> str:
+    def _complete_openai(self, prompt: str, system: str | None,
+                         seed: int | None) -> str:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
+        effective_seed = seed if seed is not None else self.config.sampling_seed
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
         }
-        if self.config.sampling_seed is not None:
-            payload["seed"] = self.config.sampling_seed
+        if effective_seed is not None:
+            payload["seed"] = effective_seed
         headers = {"Content-Type": "application/json"}
         if self.config.api_key and self.config.api_key != "not-needed-for-local":
             headers["Authorization"] = f"Bearer {self.config.api_key}"
         url = self.config.base_url.rstrip("/") + "/chat/completions"
-        self._start_request_metadata(endpoint="/chat/completions", seed_sent=(
-            self.config.sampling_seed is not None))
+        self._start_request_metadata(
+            endpoint="/chat/completions", seed_sent=(effective_seed is not None),
+            effective_seed=effective_seed,
+            seed_source=self._seed_source(seed))
         data = self._post(url, payload, headers)
         self._capture_openai_response_metadata(data)
         return data["choices"][0]["message"]["content"]
 
     # ---- Anthropic (different wire format) ----
-    def _complete_anthropic(self, prompt: str, system: str | None) -> str:
+    def _complete_anthropic(self, prompt: str, system: str | None,
+                            seed: int | None) -> str:
         url = self.config.base_url.rstrip("/") + "/messages"
         payload = {
             "model": self.config.model,
@@ -111,14 +126,25 @@ class LLMClient:
             "x-api-key": self.config.api_key,
             "anthropic-version": "2023-06-01",
         }
+        effective_seed = seed if seed is not None else self.config.sampling_seed
         # Anthropic does not currently offer the OpenAI-compatible seed request
         # parameter. Preserve the requested value in metadata, but do not inject a
         # made-up field into its API payload.
-        self._start_request_metadata(endpoint="/messages", seed_sent=False)
+        self._start_request_metadata(
+            endpoint="/messages", seed_sent=False, effective_seed=effective_seed,
+            seed_source=self._seed_source(seed))
         data = self._post(url, payload, headers)
         self._capture_anthropic_response_metadata(data)
         # Anthropic returns a list of content blocks.
         return "".join(b.get("text", "") for b in data.get("content", []))
+
+    def _seed_source(self, call_seed: int | None) -> str | None:
+        """Which value actually determined this call's effective seed."""
+        if call_seed is not None:
+            return "call"
+        if self.config.sampling_seed is not None:
+            return "config"
+        return None
 
     def _post(self, url: str, payload: dict, headers: dict) -> dict:
         last_err = None
@@ -160,10 +186,19 @@ class LLMClient:
             "sampling_seed_sent": False,
         }
 
-    def _start_request_metadata(self, endpoint: str, seed_sent: bool) -> None:
+    def _start_request_metadata(self, endpoint: str, seed_sent: bool,
+                                effective_seed: int | None = None,
+                                seed_source: str | None = None) -> None:
         metadata = self._base_request_metadata()
         metadata["endpoint"] = endpoint
         metadata["sampling_seed_sent"] = seed_sent
+        # The seed that actually determined this call, and whether it came
+        # from an explicit per-call override (e.g. SeedPlan) or the client's
+        # static config default -- distinguishing these is what lets a static
+        # sampling null prove it used a distinct seed per draw rather than
+        # silently repeating one value across every call.
+        metadata["effective_sampling_seed"] = effective_seed
+        metadata["sampling_seed_source"] = seed_source
         self.last_request_metadata = metadata
         # A failed request must not leave a previous call's fingerprint attached to
         # the new completion record.

@@ -1,0 +1,77 @@
+# NON-IDENTITY SUMMARY CONTROL (this build's Phase 7).
+#
+# Same extra reflection call and context length as
+# experiment_self_narrative_unassigned.yaml, but the reflection prompt asks
+# only for a plain factual summary of recent events -- never "who you are,"
+# "what matters," or "what you want" (aiworld.components.self_model_component.
+# NON_IDENTITY_SUMMARY_PROMPT / aiworld.self_model.SelfModel.as_summary_prompt_block).
+#
+# Purpose: isolate whether a behavioral difference between the factual-ledger
+# arm and the self-narrative arm is caused by IDENTITY CONTENT specifically,
+# or merely by the extra generation call / longer context that self-narrative
+# also happens to add. Without this control those two things are confounded.
+#
+# Compare against experiment_self_narrative_unassigned.yaml (same world,
+# same reflection cadence, identity content instead of a factual summary) and
+# experiment_factual_memory_unassigned.yaml (same world, no reflection call
+# at all). All three share topology, agent count, and seeds.
+
+experiment_name: self_narrative_control
+description: >
+  Non-identity summary control: six identical policy instances receive
+  factual experience and periodically write a plain factual summary (never
+  identity content) that is then shown back in later action prompts. Isolates
+  the "extra generation / longer context" confound from the self-narrative
+  arm's identity content.
+
+world:
+  locations: [north, south, east, west, center]
+  edges:
+    - [north, center]
+    - [south, center]
+    - [east, center]
+    - [west, center]
+  resources:
+    - {location: north, drive: hunger, quantity: 30}
+    - {location: south, drive: thirst, quantity: 30}
+    - {location: east,  drive: hunger, quantity: 15}
+    - {location: west,  drive: thirst, quantity: 15}
+  mortality: true
+  vocabulary: neutral
+  memory_style: factual
+  resource_map_mode: counterbalanced
+  randomize_opaque_labels: true
+
+agents:
+  count: 6
+  start_mode: balanced
+  show_self_model: true        # a block IS shown back -- just not identity-framed
+  directive: null
+  action_memory: none          # actions receive the summary block, not a raw ledger
+  action_memory_max_events: 12
+  action_context_max_chars: 1200
+  self_narrative_control: true # the treatment switch (scripts/run_llm.py)
+
+drives:
+  hunger:      {decay_per_tick: 0.05, replenish_amount: 0.6, lethal: true}
+  thirst:      {decay_per_tick: 0.08, replenish_amount: 0.7, lethal: true}
+  affiliation: {decay_per_tick: 0.03, replenish_amount: 0.4, lethal: false}
+
+reflection:
+  every_n_ticks: 5             # same cadence as experiment_self_narrative_unassigned.yaml
+  enabled: true
+  crisis_triggered: false
+  prompt: flat                 # unused: self_narrative_control overrides the template choice
+
+communication:
+  mode: none
+
+run:
+  ticks: 40
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+  model: null
+
+confound_controls:
+  vary_reflection_prompt: false
+  flat_control: false
+  cross_model: false

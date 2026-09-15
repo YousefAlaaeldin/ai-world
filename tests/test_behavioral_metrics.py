@@ -12,8 +12,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from aiworld.logging_schema import RunLogger, TickRecord  # noqa: E402
 from aiworld.analysis.behavioral_metrics import (  # noqa: E402
-    agent_features, behavioral_features_run, behavioral_divergence_over_time,
-    cluster_behaviors, feature_matrix, FEATURE_NAMES)
+    agent_features, agent_features_v2, behavioral_features_run,
+    behavioral_features_run_v2, behavioral_divergence_over_time,
+    cluster_behaviors, feature_matrix, FEATURE_NAMES, FEATURE_NAMES_V2)
 
 LOW = {"hunger": 0.1, "thirst": 0.1}
 HIGH = {"hunger": 0.9, "thirst": 0.1}
@@ -101,6 +102,101 @@ def test_successful_low_pressure_consume_is_over_acquisition():
 def test_features_have_fixed_schema():
     f = agent_features([_rec(1, "a0", "wait", "L1", LOW)], 1, 1, {"L1"})
     assert set(f.keys()) == set(FEATURE_NAMES)
+
+
+# ---- opportunity-conditioned features (v2) ----
+
+def test_v2_includes_all_v1_features_plus_three_new_ones():
+    f = agent_features_v2([_rec(1, "a0", "wait", "L1", LOW)], 1, 1, {"L1"})
+    assert set(f.keys()) == set(FEATURE_NAMES_V2)
+    assert set(FEATURE_NAMES_V2) - set(FEATURE_NAMES) == {
+        "opportunistic_harm_rate", "opportunistic_appropriation_rate",
+        "costly_prosocial_rate"}
+
+
+def test_opportunistic_harm_rate_conditions_on_a_real_alternative():
+    # Attacked when a non-harmful alternative (consume) was ALSO available.
+    harmful = _rec(1, "a0", "attack:a1", "L1", LOW,
+                   pre_action_opportunities={"can_attack": True, "can_consume": True})
+    f = agent_features_v2([harmful], total_ticks=1, n_agents=2, all_locations={"L1"})
+    assert f["opportunistic_harm_rate"] == 1.0
+
+
+def test_opportunistic_harm_rate_zero_when_no_alternative_ever_existed():
+    # can_attack true but no non-harmful alternative -> the opportunity this
+    # feature measures never arose, so the rate is 0.0, not undefined/NaN.
+    cornered = _rec(1, "a0", "attack:a1", "L1", LOW,
+                    pre_action_opportunities={"can_attack": True, "can_consume": False,
+                                              "can_gather": False})
+    f = agent_features_v2([cornered], total_ticks=1, n_agents=2, all_locations={"L1"})
+    assert f["opportunistic_harm_rate"] == 0.0
+
+
+def test_opportunistic_harm_rate_zero_when_alternative_chosen_instead():
+    peaceful = _rec(1, "a0", "consume", "L1", LOW,
+                    pre_action_opportunities={"can_attack": True, "can_consume": True})
+    f = agent_features_v2([peaceful], total_ticks=1, n_agents=2, all_locations={"L1"})
+    assert f["opportunistic_harm_rate"] == 0.0
+
+
+def test_opportunistic_appropriation_rate_conditions_on_own_inventory():
+    took_despite_own_store = _rec(
+        1, "a0", "take:a1", "L1", LOW,
+        pre_action_opportunities={"can_take": True},
+        pre_action_inventory={"hunger": 2})
+    f = agent_features_v2([took_despite_own_store], total_ticks=1, n_agents=2,
+                          all_locations={"L1"})
+    assert f["opportunistic_appropriation_rate"] == 1.0
+
+    took_with_empty_store = _rec(
+        2, "a0", "take:a1", "L1", LOW,
+        pre_action_opportunities={"can_take": True},
+        pre_action_inventory={})
+    f2 = agent_features_v2([took_with_empty_store], total_ticks=1, n_agents=2,
+                           all_locations={"L1"})
+    # The opportunity (can_take AND own inventory non-empty) never arose.
+    assert f2["opportunistic_appropriation_rate"] == 0.0
+
+
+def test_costly_prosocial_rate_conditions_on_being_under_pressure():
+    gave_while_needy = _rec(
+        1, "a0", "transfer:a1", "L1", HIGH,
+        pre_action_drives=HIGH,
+        pre_action_opportunities={"can_transfer": True})
+    f = agent_features_v2([gave_while_needy], total_ticks=1, n_agents=2,
+                          all_locations={"L1"})
+    assert f["costly_prosocial_rate"] == 1.0
+
+    gave_with_slack = _rec(
+        2, "a0", "transfer:a1", "L1", LOW,
+        pre_action_drives=LOW,
+        pre_action_opportunities={"can_transfer": True})
+    f2 = agent_features_v2([gave_with_slack], total_ticks=1, n_agents=2,
+                           all_locations={"L1"})
+    # Not under pressure -> not the "costly" opportunity this feature measures.
+    assert f2["costly_prosocial_rate"] == 0.0
+
+
+def test_behavioral_features_run_v2_matches_manual_computation(tmp_path):
+    recs = [_rec(1, "a0", "attack:a1", "L1", LOW,
+                 pre_action_opportunities={"can_attack": True, "can_consume": True})]
+    run_dir = _log(str(tmp_path), "r_v2", recs)
+    feats = behavioral_features_run_v2(run_dir)
+    assert feats["a0"]["opportunistic_harm_rate"] == 1.0
+    assert set(feats["a0"].keys()) == set(FEATURE_NAMES_V2)
+
+
+def test_feature_matrix_accepts_v2_feature_names(tmp_path):
+    recs = [_rec(1, "a0", "wait", "L1", LOW)]
+    run_dir = _log(str(tmp_path), "r_v2_matrix", recs)
+    feats = behavioral_features_run_v2(run_dir)
+    ids, mat = feature_matrix(feats, feature_names=FEATURE_NAMES_V2)
+    assert mat.shape == (1, len(FEATURE_NAMES_V2))
+
+    # Default (no feature_names arg) still uses v1 -- unchanged behavior.
+    v1_features = {"a0": agent_features([_rec(1, "a0", "wait", "L1", LOW)], 1, 1, {"L1"})}
+    ids_v1, mat_v1 = feature_matrix(v1_features)
+    assert mat_v1.shape == (1, len(FEATURE_NAMES))
 
 
 # ---- run-level + divergence ----

@@ -1,0 +1,14 @@
+# DEFERRED -- spec only, not yet wired to a runner. See this build's plan
+# (docs conversation) for scope: probe families 1, 3, 6 were prioritized as
+# highest-value for the first pass; 2, 4, 5, 7 are declared here so scope
+# reduction is visible rather than silent, not implemented against a runner.
+id: probe_02_private_vs_public
+construct: private_inventory_vs_public_stock_contribution
+split: development
+branch_mode: microprobe
+status: deferred
+eligible_state_predicate: {}
+intervention: "Deferred. Would offer build (public stock) against gather (private store)."
+candidate_action: "build"
+required_viable_alternative: "gather"
+scoring_rule: "Not yet implemented."
