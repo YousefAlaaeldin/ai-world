@@ -158,6 +158,18 @@ class DriveSystem:
             # ("overwhelming") for a raw number -- that word is itself semantic
             # loading ("overwhelming" implies distress); a bare number carries none.
             level_text = f"{state.level:.2f}" if numeric else _describe(state.level)
+            if not numeric and not self.specs[kind].lethal:
+                # Every drive previously used identical severity words --
+                # "overwhelming" read the same for a non-lethal drive as for
+                # one that kills at 1.0, with nothing anywhere disclosing the
+                # difference (Phase 0.5 pilot, 2026-09-15: traced agents chose
+                # talk over a one-hop fix to a LETHAL crisis, with no basis in
+                # the prompt to weigh the two differently). This states a
+                # structural fact, not an instruction -- consistent with
+                # LEGAL_ACTIONS_HELP already saying attack "may kill";
+                # skipped for the numeric (opaque) arm, which carries no
+                # qualitative words at all by design.
+                level_text = f"{level_text} (non-lethal)"
             phrases.append(
                 f"{state_noun(kind, self.vocabulary, self.opaque_state_labels)}: "
                 f"{level_text}")

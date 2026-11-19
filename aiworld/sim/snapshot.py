@@ -40,6 +40,7 @@ class AgentSnapshot:
     recent_memories: list[str]
     long_term_memory: list[str]
     inventory: dict[str, int]
+    last_known_resource: list[str] | None  # JSON-safe; (drive, location) pair
 
     @classmethod
     def from_agent(cls, agent: Any) -> "AgentSnapshot":
@@ -66,6 +67,8 @@ class AgentSnapshot:
             recent_memories=list(agent.recent_memories),
             long_term_memory=list(agent.long_term_memory),
             inventory={_kind_key(k): v for k, v in agent.inventory.items()},
+            last_known_resource=(list(agent.last_known_resource)
+                                 if agent.last_known_resource else None),
         )
 
     def build_agent(self) -> Any:
@@ -108,6 +111,8 @@ class AgentSnapshot:
             recent_memories=list(self.recent_memories),
             inventory={DriveKind(k): v for k, v in self.inventory.items()},
             long_term_memory=list(self.long_term_memory),
+            last_known_resource=(tuple(self.last_known_resource)
+                                 if self.last_known_resource else None),
         )
 
 
@@ -148,6 +153,7 @@ class WorldSnapshot:
     communication_mode: str
     crisis_reflection_enabled: bool
     randomize_opaque_labels: bool
+    adjacent_resource_preview: bool
     location_labels: dict[str, str]
     opaque_resource_labels: dict[str, str]
     opaque_state_labels: dict[str, str]

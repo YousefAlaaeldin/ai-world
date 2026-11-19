@@ -272,6 +272,31 @@ def test_cluster_separates_two_behavior_types(tmp_path):
     assert "error" not in result
     assert result["selected_k"] == 2
     assert result["clusters_beat_null"] is True
+
+
+def test_cluster_behaviors_skips_an_aborted_run_instead_of_raising(tmp_path):
+    # A stray aborted run passed in alongside good ones must not block
+    # clustering everyone else -- mirrors run_level.condition_summaries'
+    # identical leniency policy.
+    recs = []
+    for a in range(4):
+        recs += [_rec(i, f"c{a}", "consume", "L1", HIGH) for i in range(1, 6)]
+    for a in range(4):
+        recs += [_rec(i, f"m{a}", f"move:L{i%3}", f"L{i%3}", LOW) for i in range(1, 6)]
+    good_dir = _log(str(tmp_path), "good", recs)
+
+    aborted_id = "bad"
+    aborted_logger = RunLogger(aborted_id, root=str(tmp_path))
+    aborted_logger.log_meta({
+        "run_id": aborted_id, "n_agents": 1,
+        "resolved_config": {"run": {"ticks": 5}, "world": {"locations": ["L1"]}},
+    })
+    aborted_logger.finalize(status="aborted", error="simulated crash")
+    bad_dir = str(tmp_path / aborted_id)
+
+    result = cluster_behaviors([good_dir, bad_dir])
+    assert "error" not in result
+    assert result["n_agent_vectors"] == 8  # only the 8 good-run agents, not the aborted one
     # the two types must not share a cluster
     label_of = {}
     for cid, members in result["clusters"].items():

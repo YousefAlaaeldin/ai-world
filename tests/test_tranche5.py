@@ -269,6 +269,56 @@ def test_per_call_seed_overrides_config_default(monkeypatch):
     assert client.request_metadata()["sampling_seed_source"] == "config"
 
 
+def test_num_ctx_is_sent_as_ollama_options_when_configured(monkeypatch):
+    captured = {}
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"id": "cmpl-3", "model": "model-v1",
+                    "choices": [{"finish_reason": "stop", "message": {"content": "wait"}}]}
+
+    def fake_post(url, json, headers, timeout):
+        captured["payload"] = json
+        return Response()
+
+    monkeypatch.setattr("aiworld.llm_client.requests.post", fake_post)
+    client = LLMClient(LLMConfig(base_url="http://example.invalid/v1", model="m",
+                                  max_retries=1, num_ctx=2048))
+    client.complete("hello")
+    assert captured["payload"]["options"] == {"num_ctx": 2048}
+    assert client.request_metadata()["num_ctx"] == 2048
+
+
+def test_num_ctx_omitted_by_default(monkeypatch):
+    captured = {}
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"id": "cmpl-4", "model": "model-v1",
+                    "choices": [{"finish_reason": "stop", "message": {"content": "wait"}}]}
+
+    def fake_post(url, json, headers, timeout):
+        captured["payload"] = json
+        return Response()
+
+    monkeypatch.setattr("aiworld.llm_client.requests.post", fake_post)
+    client = LLMClient(LLMConfig(base_url="http://example.invalid/v1", model="m",
+                                  max_retries=1))
+    client.complete("hello")
+    assert "options" not in captured["payload"]
+    assert client.request_metadata()["num_ctx"] is None
+
+
 def test_action_parse_failure_is_logged_as_a_data_quality_event(tmp_path):
     class BadClient:
         def complete(self, prompt, system=None, seed=None):

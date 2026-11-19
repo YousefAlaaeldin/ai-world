@@ -64,6 +64,8 @@ def build_world(cfg: dict, run_id: str, n_agents: int, seed: int,
             "crisis_triggered", False),
         randomize_opaque_labels=cfg["world"].get(
             "randomize_opaque_labels", True),
+        adjacent_resource_preview=cfg["world"].get(
+            "adjacent_resource_preview", False),
     )
     return world, {
         "initial_locations": {agent.agent_id: agent.location for agent in agents},
@@ -125,7 +127,9 @@ def main():
     status, error = "completed", None
     try:
         world.run(policy, ticks=ticks, reflect_every=reflect_every, reflect_fn=None)
-    except Exception as exc:
+    except BaseException as exc:
+        # BaseException, not Exception: see scripts/run_llm.py's matching comment --
+        # KeyboardInterrupt must also be labeled "aborted", not "completed".
         status, error = "aborted", str(exc)
         raise
     finally:

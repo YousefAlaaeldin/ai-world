@@ -468,3 +468,27 @@ def test_vocabulary_arms_differ_only_in_nouns():
     for neutral_term, bio_term in subs:
         rendered = rendered.replace(neutral_term, bio_term)
     assert rendered == biological.as_prompt_block()
+
+
+def test_non_lethal_drive_is_labeled_distinctly_from_lethal_ones():
+    # Phase 0.5 pilot (2026-09-15): "overwhelming" read identically for
+    # isolation (non-lethal) and hunger/thirst (lethal) -- nothing in the
+    # prompt let the model weigh a survivable pressure differently from a
+    # fatal one. This is the fix: a structural fact, not an instruction.
+    ds = DriveSystem(vocabulary="neutral")
+    ds.states[DriveKind.HUNGER].level = 0.95
+    ds.states[DriveKind.THIRST].level = 0.95
+    ds.states[DriveKind.AFFILIATION].level = 0.95
+    text = ds.as_prompt_block()
+    assert "energy deficit: overwhelming," in text
+    assert "maintenance deficit: overwhelming," in text
+    assert "isolation: overwhelming (non-lethal)" in text
+
+
+def test_opaque_arm_never_gets_the_lethality_qualifier():
+    # The opaque arm's entire point is zero semantic loading -- adding
+    # "(non-lethal)" there would leak exactly the information it's designed
+    # to withhold.
+    ds = DriveSystem(vocabulary="opaque")
+    ds.states[DriveKind.AFFILIATION].level = 0.95
+    assert "non-lethal" not in ds.as_prompt_block()

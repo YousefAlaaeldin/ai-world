@@ -11,6 +11,16 @@ The question is:
 > or distal goal, can an objective record of experience support stable,
 > state-conditioned behavioral commitments?
 
+**At a glance**
+
+- A tick-based grid world with resources, drives, mortality and a constrained action language, run by multiple LLM agents.
+- A locked **2×2 open-world matrix** (mortality on/off × resource scarcity high/low), plus matched de-primed, self-narrative and static-sampling-null controls.
+- Reproducibility built in: per-call seed plans, world snapshots and replay, provenance hashes, and every prompt and completion logged.
+- Branch-perturbation experiments (sham, obstacle, cost trade-off, ledger ablation) test whether behavior is *state-conditioned* rather than prompt-echo.
+- Cross-family replication pinned (Qwen2.5-14B via Ollama), with an inter-rater protocol and analysis-plan templates.
+
+Stack: Python 3.11, any OpenAI-compatible or Ollama endpoint, pytest (27 test modules).
+
 Read [the canonical protocol](docs/EXPERIMENT_PROTOCOL.md) before running or
 interpreting an experiment. It defines the condition matrix, replication unit, claim
 boundary, and evidence required for a stronger commitment claim.

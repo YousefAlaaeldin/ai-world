@@ -82,6 +82,8 @@ def build_world(cfg, run_id, n_agents, seed, mortality, vocabulary="neutral",
             "crisis_triggered", False),
         randomize_opaque_labels=cfg["world"].get(
             "randomize_opaque_labels", True),
+        adjacent_resource_preview=cfg["world"].get(
+            "adjacent_resource_preview", False),
     )
     setup = {
         "initial_locations": {
@@ -315,7 +317,13 @@ def main():
     try:
         world.run(policy, ticks=ticks,
                  reflect_every=reflect_every, reflect_fn=reflect)
-    except Exception as exc:
+    except BaseException as exc:
+        # BaseException, not Exception: a Ctrl+C mid-run raises KeyboardInterrupt,
+        # which does NOT subclass Exception. Catching only Exception here left an
+        # interrupted, truncated run mislabeled "completed" in the immutable
+        # status.json (require_completed_run has no independent tick-count check,
+        # so it would have silently accepted a partial run as a full one). Always
+        # re-raised immediately below, so process-exit behavior is unchanged.
         status, error = "aborted", str(exc)
         raise
     finally:

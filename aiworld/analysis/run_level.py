@@ -110,8 +110,24 @@ def seed_run_dirs(sweep_dir: str) -> dict[str, str]:
 
 
 def condition_summaries(sweep_dir: str) -> dict[str, dict[str, float | int]]:
-    """Summarize every completed world run immediately under one condition path."""
-    return {seed: run_summary(path) for seed, path in seed_run_dirs(sweep_dir).items()}
+    """Summarize every completed world run immediately under one condition path.
+
+    Skips a seed whose provenance explicitly says non-"completed" (aborted,
+    invalid_output) rather than raising -- condition_attrition is the tool
+    that surfaces those exclusions; this function crashing on the first one
+    it meets would defeat the point of reporting attrition separately for
+    every OTHER seed. Matches the leniency policy used everywhere else in
+    aiworld.analysis.provenance: missing/unknown status is permitted through
+    (legacy run, hand-built fixture), only an explicit non-"completed"
+    status is excluded.
+    """
+    summaries = {}
+    for seed, path in seed_run_dirs(sweep_dir).items():
+        status = load_run_provenance(path).get("status")
+        if status not in (None, "completed"):
+            continue
+        summaries[seed] = run_summary(path)
+    return summaries
 
 
 def _bootstrap_mean_ci(differences: np.ndarray, *, iterations: int,

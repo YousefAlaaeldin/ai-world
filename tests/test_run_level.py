@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from aiworld.analysis.run_level import (  # noqa: E402
     condition_attrition,
+    condition_summaries,
     paired_condition_comparison,
     run_summary,
     seed_run_dirs,
@@ -55,6 +56,26 @@ def _write_run(root, condition: str, seed: int, *, divergent: bool) -> str:
             ))
     logger.close()
     return str(root / run_id)
+
+
+def test_condition_summaries_skips_an_aborted_seed_instead_of_raising(tmp_path):
+    # A stray aborted seed in the same condition folder must not block
+    # summarizing every other seed -- condition_attrition is the tool that
+    # surfaces the exclusion; this function crashing here would defeat that.
+    _write_run(tmp_path, "cond", 0, divergent=True)
+    _write_run(tmp_path, "cond", 1, divergent=False)
+    aborted_run_id = "cond/seed_2"
+    aborted_logger = RunLogger(aborted_run_id, root=str(tmp_path))
+    aborted_logger.log_meta({
+        "run_id": aborted_run_id, "policy": "stub", "n_agents": 2,
+        "resolved_config": {"run": {"ticks": 2}, "world": {"locations": ["L1"]}},
+    })
+    aborted_logger.finalize(status="aborted", error="simulated crash")
+
+    summaries = condition_summaries(str(tmp_path / "cond"))
+
+    assert set(summaries) == {"seed_0", "seed_1"}
+    assert "seed_2" not in summaries
 
 
 def test_run_summary_keeps_agents_nested_inside_one_world(tmp_path):

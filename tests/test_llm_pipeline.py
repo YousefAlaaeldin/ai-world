@@ -113,3 +113,18 @@ def test_parse_action_rejects_illegal(tmp_path):
     # A valid consume passes through.
     assert parse_action("I think I will consume", world, agent) == "consume"
     logger.close()
+
+
+def test_parse_action_tolerates_colon_space_directed_syntax(tmp_path):
+    # Phase 0.5 feasibility pilot (2026-09-15): the live model reliably wrote
+    # "move: <place>" (colon-space) against a "move:<place>" grammar, and the
+    # exact-match parser discarded every one of those as no_legal_action. A
+    # formatting variant, not a genuine data-quality failure, must still parse.
+    logger = RunLogger("parsetest_spacing", root=str(tmp_path))
+    world = _build_world(logger)
+    agent = world.agents[0]
+    dest = next(iter(world.adjacency[agent.location]))
+    assert parse_action(f"move: {dest}", world, agent) == f"move:{dest}"
+    assert parse_action(f"move:   {dest}", world, agent) == f"move:{dest}"
+    assert parse_action(f"Move : {dest}", world, agent) == f"move:{dest}"
+    logger.close()

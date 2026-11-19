@@ -331,7 +331,9 @@ def main() -> None:
             seed_plan=seed_plan,
             on_context_ready=log_static_metadata,
         )
-    except Exception as exc:
+    except BaseException as exc:
+        # BaseException, not Exception: see scripts/run_llm.py's matching comment --
+        # KeyboardInterrupt must also be labeled "aborted", not "completed".
         status, error = "aborted", str(exc)
         raise
     finally:

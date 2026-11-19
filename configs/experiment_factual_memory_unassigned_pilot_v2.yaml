@@ -1,0 +1,106 @@
+# FEASIBILITY-PILOT VARIANT -- NOT a declared arm of the canonical condition
+# matrix (docs/EXPERIMENT_PROTOCOL.md). Do not compare results from this
+# config against experiment_factual_memory_unassigned.yaml as if it were a
+# clean paired contrast: two things change here at once (see below), so any
+# survival/behavior difference is not attributable to either one alone.
+#
+# Built directly from the Phase 0.5 pilot (2026-09-15, seed 0, full 6-agent
+# run): every traced agent that died had a one-hop route to its crisis
+# resource clearly named in its prompt, but (a) no content preview of what
+# was actually at that neighbor before arriving, (b) so little runway left
+# by the time a correction might happen that one or two more wrong turns was
+# fatal, (c) no way to learn about a resource except by personally finding
+# it, and (d) identical severity wording for a fatal deficit and a merely
+# uncomfortable one. This config isolates none of the four causes -- it
+# turns all four knobs at once as a quick "does the population survive to
+# produce useful data at all" check before spending a real paired-isolation
+# pilot on each separately:
+#
+#   1. world.adjacent_resource_preview: true (aiworld/sim/world.py) -- an
+#      agent now sees each neighbor's resource content, not just its name,
+#      before deciding whether to move there.
+#   2. drives.hunger/thirst.decay_per_tick raised from this file's original
+#      0.015/0.02 -- unaided (zero corrective action, ever) time-to-death is
+#      now ~33 ticks for hunger (0.03); thirst is currently 0.05 (~20
+#      ticks) -- NOTE this is earlier than the ~30-tick target, flagged for
+#      review, not yet reconciled. Both still comfortably later than the
+#      ORIGINAL rates' 20/12.5-tick unaided death, which is what killed
+#      every agent in the seed-0 pilot by tick 20/40.
+#   3. communication.mode: informational (aiworld/sim/world.py) -- talk can
+#      now relay one objective resource-location fact the speaker personally
+#      verified to the listener (who can pass it on again) -- never identity
+#      content, never freely generated text.
+#   4. Internal-state wording now distinguishes lethal from non-lethal
+#      drives (aiworld/drives.py) -- isolation reads "overwhelming
+#      (non-lethal)" instead of the same bare "overwhelming" hunger/thirst
+#      use, a structural fact rather than an instruction.
+#
+# To isolate any one change: copy this file and flip just that knob back to
+# its value in experiment_factual_memory_unassigned.yaml (preview: false,
+# communication.mode: none, decay_per_tick: 0.05/0.08). The severity-wording
+# change (#4) is not config-gated -- it is the same aiworld/drives.py logic
+# in every non-opaque-vocabulary condition, old and new.
+
+experiment_name: factual_memory_unassigned_pilot_v2
+description: >
+  Combined feasibility-tuning variant of the primary unassigned-history
+  condition: adds a neighbor resource-content preview, slows hunger/thirst
+  decay, lets talk relay one verified resource-location fact, and gives
+  non-lethal drives distinct severity wording -- in response to
+  total-extinction-by-tick-20 observed in the Phase 0.5 seed-0 pilot under
+  the original (unmodified) config. Exploratory only -- not a paired
+  contrast.
+
+world:
+  locations: [north, south, east, west, center]
+  edges:
+    - [north, center]
+    - [south, center]
+    - [east, center]
+    - [west, center]
+  resources:
+    - {location: north, drive: hunger, quantity: 30}
+    - {location: south, drive: thirst, quantity: 30}
+    - {location: east,  drive: hunger, quantity: 15}
+    - {location: west,  drive: thirst, quantity: 15}
+  mortality: true
+  vocabulary: neutral
+  memory_style: factual
+  resource_map_mode: counterbalanced
+  randomize_opaque_labels: true
+  adjacent_resource_preview: true
+
+agents:
+  count: 6
+  start_mode: balanced
+  show_self_model: false
+  directive: null
+  action_memory: factual_ledger
+  action_memory_max_events: 12
+  action_context_max_chars: 1200
+
+drives:
+  hunger:      {decay_per_tick: 0.03, replenish_amount: 0.6, lethal: true}
+  thirst:      {decay_per_tick: 0.035,  replenish_amount: 0.7, lethal: true}
+  affiliation: {decay_per_tick: 0.03,  replenish_amount: 0.4, lethal: false}
+
+reflection:
+  every_n_ticks: 5
+  enabled: false
+  crisis_triggered: false
+  prompt: flat
+
+communication:
+  mode: informational
+
+run:
+  ticks: 60  # raised from 40 (2026-09-15) -- see the live 40-tick pilot seed 0's
+             # full-survival result; decay floors (~29/33 unaided) now sit past
+             # the halfway point of the run rather than near its end.
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+  model: null
+
+confound_controls:
+  vary_reflection_prompt: false
+  flat_control: false
+  cross_model: false

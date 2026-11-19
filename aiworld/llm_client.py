@@ -40,6 +40,17 @@ class LLMConfig:
     # has no equivalent request field, so it is recorded as unsupported rather than
     # silently pretending the request was seeded.
     sampling_seed: int | None = None
+    # Ollama-specific context-window cap, sent as {"options": {"num_ctx": N}} on
+    # the OpenAI-compatible endpoint (Ollama passes this through; other
+    # OpenAI-compatible servers generally ignore unknown top-level fields).
+    # None (default) omits it entirely -- unchanged behavior, whatever the
+    # server's own default context length is. This does NOT change the
+    # dominant VRAM cost (the model's own weights); it only bounds the
+    # KV-cache allocation, which scales with context length. Set well above
+    # this project's actual prompts (~1200 chars / ~300 tokens action
+    # context, capped max_tokens=300 completion) rather than at a server
+    # default that may be far larger than anything actually sent.
+    num_ctx: int | None = None
 
 
 class LLMClient:
@@ -97,6 +108,8 @@ class LLMClient:
         }
         if effective_seed is not None:
             payload["seed"] = effective_seed
+        if self.config.num_ctx is not None:
+            payload["options"] = {"num_ctx": self.config.num_ctx}
         headers = {"Content-Type": "application/json"}
         if self.config.api_key and self.config.api_key != "not-needed-for-local":
             headers["Authorization"] = f"Bearer {self.config.api_key}"
@@ -184,6 +197,7 @@ class LLMClient:
             "sampling_seed": self.config.sampling_seed,
             "sampling_seed_supported": seed_supported,
             "sampling_seed_sent": False,
+            "num_ctx": self.config.num_ctx,
         }
 
     def _start_request_metadata(self, endpoint: str, seed_sent: bool,
@@ -280,6 +294,8 @@ def config_from_env() -> LLMConfig:
     raw_sampling_seed = os.getenv("AIWORLD_SAMPLING_SEED")
     sampling_seed = (int(raw_sampling_seed)
                      if raw_sampling_seed not in (None, "") else None)
+    raw_num_ctx = os.getenv("AIWORLD_NUM_CTX")
+    num_ctx = int(raw_num_ctx) if raw_num_ctx not in (None, "") else None
     return LLMConfig(
         base_url=os.getenv("AIWORLD_BASE_URL", default_base),
         model=os.getenv("AIWORLD_MODEL", "huihui_ai/mistral-small-abliterated:24b"),
@@ -287,4 +303,5 @@ def config_from_env() -> LLMConfig:
         temperature=float(os.getenv("AIWORLD_TEMPERATURE", "0.8")),
         provider=provider,
         sampling_seed=sampling_seed,
+        num_ctx=num_ctx,
     )

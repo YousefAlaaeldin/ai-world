@@ -156,7 +156,9 @@ def run_branches_for_condition(
                     branch_manifests.append(manifest.to_dict())
 
             world.step(main_policy, reflect_every=0, reflect_fn=None)
-    except Exception as exc:  # noqa: BLE001
+    except BaseException as exc:  # noqa: BLE001
+        # BaseException, not Exception: see scripts/run_llm.py's matching comment --
+        # KeyboardInterrupt must also be labeled "aborted", not "completed".
         status, error = "aborted", str(exc)
         raise
     finally:

@@ -67,6 +67,13 @@ class Agent:
     # real cost. Deliberately NOT logged per tick (no schema change); behavioral
     # metrics read the gather/transfer ACTIONS, not the stock.
     inventory: dict = dataclasses.field(default_factory=dict)
+    # (drive value, location) of the most recent resource NODE this agent
+    # personally gathered or consumed from -- the one piece of location
+    # knowledge "informational" talk (communication_mode) can pass on.
+    # Deliberately narrow: a real fact the agent itself verified by being
+    # there, never a freely generated claim, matching the factual-ledger
+    # discipline used everywhere else. None until the agent has such a fact.
+    last_known_resource: tuple[str, str] | None = None
     # Durable, capped, append-only timeline of objectively salient events (crisis,
     # resource depletion, being talked to) -- see remember_long_term(). Unlike
     # recent_memories, this is NEVER drained; it's what lets a reflection many
@@ -156,6 +163,7 @@ class World:
         location_labels: dict[str, str] | None = None,
         opaque_resource_labels: dict | None = None,
         opaque_state_labels: dict | None = None,
+        adjacent_resource_preview: bool = False,
     ):
         self.locations = locations
         self.resources = resources
@@ -176,16 +184,32 @@ class World:
         # agent does. Orthogonal to `vocabulary`: memory_style picks the SENTENCE
         # shape, vocabulary picks the NOUNS inside it.
         self.memory_style = memory_style
-        if communication_mode not in {"none", "self_model"}:
-            raise ValueError("communication_mode must be 'none' or 'self_model'")
+        if communication_mode not in {"none", "self_model", "informational"}:
+            raise ValueError(
+                "communication_mode must be 'none', 'self_model', or 'informational'")
         # The primary/no-communication arm permits social contact but never
         # copies a self-authored identity into another agent's context.  The
         # legacy identity channel remains an explicit positive-control arm.
+        # 'informational' (2026-09-15) is a third, narrower channel: talk can
+        # pass along one objective resource-location fact the speaker
+        # personally verified (Agent.last_known_resource) -- never identity
+        # content, never freely generated text.
         self.communication_mode = communication_mode
         # Crisis crossings remain a logged environmental event in every arm,
         # but do not cause an additional identity-generation draw unless a
         # deliberately configured treatment opts in.
         self.crisis_reflection_enabled = crisis_reflection_enabled
+        # Default False = today's behavior unchanged: an agent perceives only
+        # its own location's content plus adjacent locations' bare names (see
+        # observations_for). True adds a resource-content preview for each
+        # adjacent location -- built to separate "didn't know a resource was
+        # nearby" from "knew and didn't move toward it" (Phase 0.5 pilot,
+        # 2026-09-15: every traced agent that died had a one-hop route to its
+        # crisis resource clearly listed, but no visibility into what was
+        # actually there). Reuses the same salience-biasing path as every
+        # other observation -- not a new channel, not a hint injected outside
+        # perception.
+        self.adjacent_resource_preview = adjacent_resource_preview
         # Shared public stock per location, built up by `build` and consumable by
         # anyone here -- the public-vs-private-good channel (Tranche 4).
         self.public_stock: dict[str, dict] = {loc: {} for loc in locations}
@@ -313,6 +337,7 @@ class World:
             communication_mode=self.communication_mode,
             crisis_reflection_enabled=self.crisis_reflection_enabled,
             randomize_opaque_labels=self.randomize_opaque_labels,
+            adjacent_resource_preview=self.adjacent_resource_preview,
             location_labels=dict(self.location_labels),
             opaque_resource_labels={
                 (k.value if isinstance(k, DriveKind) else str(k)): v
@@ -364,6 +389,7 @@ class World:
             communication_mode=snapshot.communication_mode,
             crisis_reflection_enabled=snapshot.crisis_reflection_enabled,
             randomize_opaque_labels=snapshot.randomize_opaque_labels,
+            adjacent_resource_preview=snapshot.adjacent_resource_preview,
             location_labels=dict(snapshot.location_labels),
             opaque_resource_labels={
                 DriveKind(k): v for k, v in snapshot.opaque_resource_labels.items()},
@@ -401,6 +427,14 @@ class World:
                           key=self.location_label):
             obs.append(Observation(text=f"you could move to {self.location_label(loc)}",
                                    related_drive=None, base_weight=0.5))
+            if self.adjacent_resource_preview:
+                for r in self.resources:
+                    if r.location == loc and r.quantity > 0:
+                        label = self.resource_label(r.drive)
+                        obs.append(Observation(
+                            text=(f"at {self.location_label(loc)} there is "
+                                  f"{label} (quantity {r.quantity})"),
+                            related_drive=r.drive, base_weight=0.5))
         if not obs:
             obs.append(Observation(text="the area is empty and quiet",
                                    related_drive=None))
@@ -559,7 +593,7 @@ class World:
             "gather": ("gathered ",),
             "build": ("contributed ",),
             "move": ("moved ",),
-            "talk": ("made contact ", "exchanged messages ", "talked "),
+            "talk": ("made contact ", "exchanged messages ", "talked ", "told "),
             "transfer": ("transferred ",),
             "take": ("took ",),
             "attack": ("attacked ",),
@@ -637,6 +671,7 @@ class World:
             factual = self.memory_style == "factual"
             if src == "node":
                 node = self._node_here(agent.location, kind)
+                agent.last_known_resource = (kind.value, agent.location)
                 node.quantity -= 1
                 if node.quantity == 0:
                     self.logger.log_event(EventRecord(
@@ -673,6 +708,7 @@ class World:
             res_word = self.resource_noun(r.drive)
             if agent.inventory.get(r.drive, 0) >= INVENTORY_CAP:
                 return f"your store of {res_word} is already full"
+            agent.last_known_resource = (r.drive.value, agent.location)
             r.quantity -= 1
             pre_store = agent.inventory.get(r.drive, 0)
             agent.inventory[r.drive] = pre_store + 1
@@ -803,6 +839,39 @@ class World:
                 return f"tried to talk to {target_id} but they were not here"
             agent.drives.satisfy(DriveKind.AFFILIATION)
             factual = self.memory_style == "factual"
+            if self.communication_mode == "informational":
+                # A narrow, objective fact only -- never identity content,
+                # never freely generated text. Propagates transitively (the
+                # listener can pass it on too) since receiving it updates
+                # the listener's own last_known_resource exactly as if they
+                # had verified it themselves.
+                shared = agent.last_known_resource
+                if shared is not None:
+                    kind = DriveKind(shared[0])
+                    loc = shared[1]
+                    res_word = self.resource_noun(kind)
+                    loc_label = self.location_label(loc)
+                    target_agent.recent_memories.append(
+                        f"tick {self.tick_count}: {agent.agent_id} told you: "
+                        f"{res_word} available at {loc_label}"
+                        if factual else
+                        f"tick {self.tick_count}: {agent.agent_id} mentioned "
+                        f"{res_word} can be found at {loc_label}")
+                    target_agent.last_known_resource = shared
+                    remember_long_term(agent,
+                        f"tick {self.tick_count}: told {target_id} about "
+                        f"{res_word} at {loc_label}")
+                    remember_long_term(target_agent,
+                        f"tick {self.tick_count}: learned from {agent.agent_id} "
+                        f"about {res_word} at {loc_label}")
+                    return f"told {target_id} about {res_word} at {loc_label}"
+                target_agent.recent_memories.append(
+                    f"tick {self.tick_count}: contact with {agent.agent_id}; "
+                    f"nothing to share"
+                    if factual else
+                    f"tick {self.tick_count}: {agent.agent_id} made contact "
+                    f"with you but had nothing to share")
+                return f"made contact with {target_id}; had nothing to share"
             if self.communication_mode == "self_model":
                 # Explicit legacy positive control: identity text is a causal
                 # treatment, not an incidental side effect of social contact.

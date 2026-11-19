@@ -39,7 +39,7 @@ import os
 
 import numpy as np
 
-from .provenance import require_completed_run
+from .provenance import load_run_provenance, require_completed_run
 from .trajectories import load_ticks
 
 
@@ -541,6 +541,13 @@ def cluster_behaviors(run_dirs: list[str], k_range=range(2, 7),
     all_ids: list[tuple[str, str]] = []
     rows: list[list[float]] = []
     for run_dir in run_dirs:
+        # Skip a run whose provenance explicitly says non-"completed" instead
+        # of raising -- a stray aborted seed shouldn't block clustering every
+        # other seed in the sweep (aiworld.analysis.run_level.condition_summaries
+        # applies the identical leniency policy; see its docstring).
+        status = load_run_provenance(run_dir).get("status")
+        if status not in (None, "completed"):
+            continue
         feats = behavioral_features_run(run_dir)
         ids, mat = feature_matrix(feats)
         for i, aid in enumerate(ids):

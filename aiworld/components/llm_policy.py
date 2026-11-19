@@ -237,6 +237,18 @@ _ACTION_RE = re.compile(
     r"\b(move:\w+|transfer:\w+|take:\w+|attack:\w+|talk:\w+"
     r"|consume|gather|build|wait)\b", re.IGNORECASE)
 
+# Live models reliably write "move: center" (colon-space) even though the
+# grammar shown to them is "move:<place>" with no space -- observed directly
+# in the Phase 0.5 feasibility pilot (2026-09-15), where it accounted for
+# every non-"ok" parse in a 6-call smoke test. This is a formatting artifact,
+# not a data-quality failure the way an out-of-grammar or malformed response
+# is, so it is normalized away before _ACTION_RE runs rather than counted as
+# one. Only closes up whitespace directly around the colon for the five
+# directed-action verbs; does not touch the target token, ``raw_completion``
+# logging, or any other spacing.
+_DIRECTED_VERB_SPACING_RE = re.compile(
+    r"\b(move|transfer|take|attack|talk)\s*:\s*", re.IGNORECASE)
+
 
 def parse_action_diagnostic(raw: str, world: World, agent: Agent) -> tuple[str, str]:
     """Extract an action plus an auditable parse status.
@@ -248,7 +260,9 @@ def parse_action_diagnostic(raw: str, world: World, agent: Agent) -> tuple[str, 
     """
     if not raw:
         return "wait", "empty_completion"
-    m = _ACTION_RE.search(raw.strip())
+    normalized = _DIRECTED_VERB_SPACING_RE.sub(
+        lambda m: f"{m.group(1).lower()}:", raw.strip())
+    m = _ACTION_RE.search(normalized)
     if not m:
         return "wait", "no_legal_action"
     action = m.group(1).lower()
