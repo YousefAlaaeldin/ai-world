@@ -19,7 +19,7 @@ The question is:
 - Branch-perturbation experiments (sham, obstacle, cost trade-off, ledger ablation) test whether behavior is *state-conditioned* rather than prompt-echo.
 - Cross-family replication pinned (Qwen2.5-14B via Ollama), with an inter-rater protocol and analysis-plan templates.
 
-Stack: Python 3.11, any OpenAI-compatible or Ollama endpoint, pytest (27 test modules).
+Stack: Python 3.11, any OpenAI-compatible or Ollama endpoint, pytest (26 test modules).
 
 Read [the canonical protocol](docs/EXPERIMENT_PROTOCOL.md) before running or
 interpreting an experiment. It defines the condition matrix, replication unit, claim
